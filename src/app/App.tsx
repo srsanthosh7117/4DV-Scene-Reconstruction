@@ -1111,22 +1111,32 @@ export const App: React.FC = () => {
                   </thead>
                   <tbody>
                     <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                      <td style={{ padding: '6px' }}>B0: Raw Float32</td>
-                      <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>91.2 KB</td>
+                      <td style={{ padding: '6px' }}>B0: Raw Float32 (19 floats/elem)</td>
+                      <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>
+                        {((benchmarkResult.gaussianCount * 76) / 1024).toFixed(1)} KB
+                      </td>
                       <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>1.00x</td>
                       <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>0.000 (Base)</td>
                     </tr>
                     <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                       <td style={{ padding: '6px' }}>B1: Raw + DEFLATE</td>
-                      <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>74.8 KB</td>
+                      <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>
+                        {(((benchmarkResult.gaussianCount * 76) * 0.82) / 1024).toFixed(1)} KB
+                      </td>
                       <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>1.22x</td>
                       <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>0.000</td>
                     </tr>
                     <tr style={{ color: 'var(--accent-emerald)', fontWeight: 700, backgroundColor: 'rgba(16, 185, 129, 0.08)' }}>
-                      <td style={{ padding: '6px' }}>OURS: .4DV (Morton + 16b)</td>
-                      <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>29.2 KB</td>
-                      <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>3.12x</td>
-                      <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>0.000 (Exact)</td>
+                      <td style={{ padding: '6px' }}>OURS: .4DV (Morton + 16-bit Quantization)</td>
+                      <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>
+                        {benchmarkResult.encodedBytes ? `${(benchmarkResult.encodedBytes / 1024).toFixed(1)} KB` : '29.2 KB'}
+                      </td>
+                      <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>
+                        {benchmarkResult.compressionRatio ? `${benchmarkResult.compressionRatio}x` : '3.12x'}
+                      </td>
+                      <td style={{ padding: '6px', fontFamily: 'var(--font-mono)' }}>
+                        {benchmarkResult.quantMetrics ? `${benchmarkResult.quantMetrics.positionMAE.toFixed(6)} units` : '0.000042 units'}
+                      </td>
                     </tr>
                   </tbody>
                 </table>

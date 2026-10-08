@@ -53,7 +53,7 @@ export class WebGLRenderer {
       alpha: false,
       antialias: true,
       powerPreference: 'high-performance',
-      preserveDrawingBuffer: false,
+      preserveDrawingBuffer: true,
     });
 
     if (!gl) {
@@ -251,6 +251,25 @@ export class WebGLRenderer {
   }
 
   /**
+   * Reads RGBA pixel buffer of current viewport from WebGL framebuffer
+   */
+  public readPixels(): { data: Uint8Array; width: number; height: number } {
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    const pixels = new Uint8Array(width * height * 4);
+    this.gl.readPixels(0, 0, width, height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixels);
+    return { data: pixels, width, height };
+  }
+
+  public getCanvas(): HTMLCanvasElement {
+    return this.canvas;
+  }
+
+  public getGLContext(): WebGL2RenderingContext {
+    return this.gl;
+  }
+
+  /**
    * Stops the render loop
    */
   public stop() {
@@ -271,3 +290,4 @@ export class WebGLRenderer {
     this.shaderManager.dispose();
   }
 }
+

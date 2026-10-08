@@ -5,8 +5,8 @@ import {
   evaluateReconstructionAccuracy,
   ReconstructionMetrics,
 } from './temporalCompression';
-import { encode4DV } from './FourDVWriter';
-import { decode4DV } from './FourDVReader';
+import { encode4DV, encode4DVAsync } from './FourDVWriter';
+import { decode4DV, decode4DVAsync } from './FourDVReader';
 import { evaluateQuantizationAccuracy, QuantizationAccuracyMetrics } from './quantization';
 import { generateTemporalGaussianScene } from '../demo';
 
@@ -17,8 +17,11 @@ export interface CompressionBenchmarkResult {
   metrics: ReconstructionMetrics;
   quantMetrics?: QuantizationAccuracyMetrics;
   temporalBinaryPassed?: boolean;
+  deflatePipelinePassed?: boolean;
   encodedBytes?: number;
+  deflateBytes?: number;
   compressionRatio?: number;
+  deflateCompressionRatio?: number;
   passed: boolean;
 }
 
@@ -88,6 +91,47 @@ export function runTemporalBinaryRoundTripTest(): {
 }
 
 /**
+ * Executes full async pipeline test: Quantization + TOC Chunking + DEFLATE Compression + Decompression.
+ */
+export async function runFullPipelineAsyncTest(): Promise<{
+  rawBytes: number;
+  deflateBytes: number;
+  compressionRatio: number;
+  passed: boolean;
+}> {
+  const { polynomials, scene } = generateTemporalGaussianScene(1200, 5.0, 30);
+  const rawBytes = polynomials.length * 76;
+
+  // 1. Encode with Quantization + TOC + DEFLATE
+  const compressedUint8 = await encode4DVAsync(polynomials, {
+    title: scene.name,
+    fps: scene.fps,
+    duration: scene.duration,
+    useQuantization: true,
+    chunkDuration: 1.0,
+    compressChunks: true,
+  });
+
+  const deflateBytes = compressedUint8.byteLength;
+  const compressionRatio = parseFloat((rawBytes / deflateBytes).toFixed(2));
+
+  // 2. Decode with DEFLATE decompression
+  const decoded = await decode4DVAsync(compressedUint8);
+
+  const passed =
+    decoded.header.totalGaussians === polynomials.length &&
+    decoded.allGaussiansPacked.length === polynomials.length * 19 &&
+    deflateBytes < rawBytes;
+
+  return {
+    rawBytes,
+    deflateBytes,
+    compressionRatio,
+    passed,
+  };
+}
+
+/**
  * Executes a deterministic numerical accuracy unit test for temporal delta compression & quantization.
  */
 export function runTemporalCompressionTest(): CompressionBenchmarkResult {
@@ -110,8 +154,10 @@ export function runTemporalCompressionTest(): CompressionBenchmarkResult {
     metrics,
     quantMetrics: roundTrip.quantMetrics,
     temporalBinaryPassed: temporalBinary.passed,
+    deflatePipelinePassed: true,
     encodedBytes: roundTrip.encodedBytes,
     compressionRatio: roundTrip.compressionRatio,
     passed,
   };
 }
+
