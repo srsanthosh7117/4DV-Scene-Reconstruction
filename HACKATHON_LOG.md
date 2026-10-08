@@ -68,3 +68,9 @@
 - Implemented 30-bit 3D Morton code (Z-order curve) spatial sorting in `src/format/morton.ts` to maximize spatial cache locality and compression entropy efficiency.
 - Implemented configurable Gaussian pruning (filtering sub-threshold alpha $< 0.05$ and sub-pixel scales $< 0.005$).
 - Measured **3.12x uncompressed footprint reduction** ($91.2\text{ KB}$ Float32 $\rightarrow$ $29.2\text{ KB}$ Quantized, 68.0% space savings).
+
+### Hour 5:00 – Hour 5:45: Custom .4DV Binary Container Format & Parser (Phase 8)
+- Specified standalone `.4DV` container binary format (Magic `4DV1`, 64-byte Header, 32-byte Table of Contents chunks, Static Block, Dynamic Block, and JSON Metadata Block).
+- Built binary encoder `FourDVWriter.ts` (`encode4DV`) packaging full 4D scene geometry into standard `.4dv` files.
+- Built binary decoder `FourDVReader.ts` (`decode4DV`) unpacking arbitrary `.4dv` files into unified interleaved GPU buffers with magic validation and version guarding.
+- Added browser-native file loading (File Picker / Drag-and-Drop) and instant binary export (`scene.4dv`).

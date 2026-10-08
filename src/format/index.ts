@@ -4,3 +4,6 @@ export * from './temporalCompression';
 export * from './compressionTests';
 export * from './morton';
 export * from './quantization';
+export * from './fourdvSchema';
+export * from './FourDVWriter';
+export * from './FourDVReader';

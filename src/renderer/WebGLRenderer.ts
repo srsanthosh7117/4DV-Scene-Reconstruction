@@ -115,6 +115,14 @@ export class WebGLRenderer {
   }
 
   /**
+   * Load raw interleaved Float32Array data directly into GPU VBO
+   */
+  public setRaw4DData(packedData: Float32Array, count: number, duration: number = 5.0) {
+    this.duration = duration;
+    this.gaussianRenderer.uploadRawData(packedData, count);
+  }
+
+  /**
    * Load static 3D Gaussians to GPU
    */
   public setGaussians(gaussians: Gaussian3D[]) {

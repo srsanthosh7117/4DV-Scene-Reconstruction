@@ -9,10 +9,14 @@ import {
   CompressionBenchmarkResult,
   quantizeAndOrderGaussians,
   QuantizationReport,
+  encode4DV,
+  decode4DV,
+  Decoded4DScene,
 } from '../format';
 
 export const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rendererRef = useRef<WebGLRenderer | null>(null);
 
   const [webglStatus, setWebglStatus] = useState<'INITIALIZING' | 'READY' | 'ERROR'>('INITIALIZING');
@@ -51,6 +55,10 @@ export const App: React.FC = () => {
   // Quantization & Spatial Ordering Report
   const [quantReport, setQuantReport] = useState<QuantizationReport | null>(null);
 
+  // Loaded .4DV Container Scene State
+  const [loadedScene, setLoadedScene] = useState<Decoded4DScene | null>(null);
+  const [loadedFileName, setLoadedFileName] = useState<string>('Procedural 4D Stream (Active)');
+
   // Compression Benchmark State
   const [benchmarkResult, setBenchmarkResult] = useState<CompressionBenchmarkResult | null>(null);
   const [showBenchmarkModal, setShowBenchmarkModal] = useState<boolean>(false);
@@ -72,9 +80,14 @@ export const App: React.FC = () => {
     setQuantReport(report);
   }, [generatedData, separatedData]);
 
-  // Handle active Gaussian dataset changes (ALL, STATIC_ONLY, DYNAMIC_ONLY)
+  // Handle active Gaussian dataset changes
   useEffect(() => {
     if (!rendererRef.current) return;
+
+    if (loadedScene) {
+      rendererRef.current.setRaw4DData(loadedScene.allGaussiansPacked, loadedScene.header.totalGaussians, loadedScene.header.duration);
+      return;
+    }
 
     let activeList = generatedData.polynomials;
     if (separationMode === 'STATIC_ONLY') {
@@ -84,7 +97,7 @@ export const App: React.FC = () => {
     }
 
     rendererRef.current.setGaussians4D(activeList, generatedData.scene.duration);
-  }, [separationMode, generatedData, separatedData]);
+  }, [separationMode, generatedData, separatedData, loadedScene]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -118,6 +131,53 @@ export const App: React.FC = () => {
       }
     };
   }, [generatedData]);
+
+  // Export current scene as real .4DV binary file
+  const handleExport4DV = () => {
+    const uint8 = encode4DV(generatedData.polynomials, {
+      title: 'Procedural 4D Gaussian Scene',
+      description: 'Exported from 4DV Browser Player',
+      fps: 30,
+      duration: 5.0,
+    });
+
+    const blob = new Blob([uint8.buffer as ArrayBuffer], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'scene.4dv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Import .4DV binary file
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const buffer = reader.result as ArrayBuffer;
+        const decoded = decode4DV(buffer);
+        setLoadedScene(decoded);
+        setLoadedFileName(file.name);
+        setDuration(decoded.header.duration);
+
+        if (rendererRef.current) {
+          rendererRef.current.setRaw4DData(
+            decoded.allGaussiansPacked,
+            decoded.header.totalGaussians,
+            decoded.header.duration
+          );
+        }
+      } catch (err) {
+        console.error('Failed to parse .4DV file:', err);
+        alert(err instanceof Error ? err.message : 'Invalid .4DV container');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
 
   const handleRunBenchmark = () => {
     const res = runTemporalCompressionTest();
@@ -188,6 +248,15 @@ export const App: React.FC = () => {
       overflow: 'hidden',
       userSelect: 'none'
     }}>
+      {/* Hidden File Input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".4dv"
+        onChange={handleFileChange}
+        style={{ display: 'none' }}
+      />
+
       {/* Top Navigation Bar */}
       <header style={{
         height: '46px',
@@ -209,12 +278,45 @@ export const App: React.FC = () => {
             boxShadow: webglStatus === 'READY' ? '0 0 8px #10b981' : 'none'
           }} />
           <span style={{ fontWeight: 700, fontSize: '13px', letterSpacing: '0.08em', color: '#f8fafc' }}>
-            4DV PLAYER <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600, marginLeft: '4px' }}>PHASE 7: QUANTIZATION & ORDERING</span>
+            4DV PLAYER <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600, marginLeft: '4px' }}>PHASE 8: CUSTOM .4DV CONTAINER</span>
           </span>
         </div>
 
         {/* View Mode Filters & Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* File Actions */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              background: '#0284c7',
+              border: 'none',
+              color: '#ffffff',
+              padding: '4px 10px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '11px',
+              fontWeight: 600
+            }}
+          >
+            Load .4DV
+          </button>
+
+          <button
+            onClick={handleExport4DV}
+            style={{
+              background: 'rgba(16, 185, 129, 0.15)',
+              border: '1px solid rgba(16, 185, 129, 0.4)',
+              color: '#34d399',
+              padding: '4px 10px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '11px',
+              fontWeight: 600
+            }}
+          >
+            Export .4DV
+          </button>
+
           {/* Static / Dynamic Filter */}
           <div style={{
             display: 'flex',
@@ -224,11 +326,14 @@ export const App: React.FC = () => {
             border: '1px solid rgba(255, 255, 255, 0.08)'
           }}>
             <button
-              onClick={() => setSeparationMode('ALL')}
+              onClick={() => {
+                setLoadedScene(null);
+                setSeparationMode('ALL');
+              }}
               style={{
-                background: separationMode === 'ALL' ? '#38bdf8' : 'transparent',
+                background: separationMode === 'ALL' && !loadedScene ? '#38bdf8' : 'transparent',
                 border: 'none',
-                color: separationMode === 'ALL' ? '#0f172a' : '#94a3b8',
+                color: separationMode === 'ALL' && !loadedScene ? '#0f172a' : '#94a3b8',
                 padding: '4px 8px',
                 borderRadius: '4px',
                 cursor: 'pointer',
@@ -239,11 +344,14 @@ export const App: React.FC = () => {
               All (1,200)
             </button>
             <button
-              onClick={() => setSeparationMode('STATIC_ONLY')}
+              onClick={() => {
+                setLoadedScene(null);
+                setSeparationMode('STATIC_ONLY');
+              }}
               style={{
-                background: separationMode === 'STATIC_ONLY' ? '#38bdf8' : 'transparent',
+                background: separationMode === 'STATIC_ONLY' && !loadedScene ? '#38bdf8' : 'transparent',
                 border: 'none',
-                color: separationMode === 'STATIC_ONLY' ? '#0f172a' : '#94a3b8',
+                color: separationMode === 'STATIC_ONLY' && !loadedScene ? '#0f172a' : '#94a3b8',
                 padding: '4px 8px',
                 borderRadius: '4px',
                 cursor: 'pointer',
@@ -254,11 +362,14 @@ export const App: React.FC = () => {
               Static ({separationStats?.staticCount || 360})
             </button>
             <button
-              onClick={() => setSeparationMode('DYNAMIC_ONLY')}
+              onClick={() => {
+                setLoadedScene(null);
+                setSeparationMode('DYNAMIC_ONLY');
+              }}
               style={{
-                background: separationMode === 'DYNAMIC_ONLY' ? '#38bdf8' : 'transparent',
+                background: separationMode === 'DYNAMIC_ONLY' && !loadedScene ? '#38bdf8' : 'transparent',
                 border: 'none',
-                color: separationMode === 'DYNAMIC_ONLY' ? '#0f172a' : '#94a3b8',
+                color: separationMode === 'DYNAMIC_ONLY' && !loadedScene ? '#0f172a' : '#94a3b8',
                 padding: '4px 8px',
                 borderRadius: '4px',
                 cursor: 'pointer',
@@ -284,7 +395,7 @@ export const App: React.FC = () => {
               fontWeight: 600
             }}
           >
-            Run Compression Suite
+            Accuracy Suite
           </button>
 
           {/* Camera Flight vs Orbit Mode */}
@@ -386,12 +497,12 @@ export const App: React.FC = () => {
             minWidth: '250px'
           }}>
             <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '2px', fontSize: '11px', letterSpacing: '0.04em' }}>
-              4D COMPRESSION & QUANTIZATION
+              CONTAINER & SCENE METRICS
             </div>
-            <div>Raw Size (Float32): <span style={{ color: '#94a3b8' }}>{((quantReport?.rawFloat32Bytes || 0) / 1024).toFixed(1)} KB</span></div>
-            <div>Quantized Footprint: <span style={{ color: '#38bdf8', fontWeight: 600 }}>{((quantReport?.quantizedBytes || 0) / 1024).toFixed(1)} KB</span></div>
-            <div>Compression Ratio: <span style={{ color: '#34d399', fontWeight: 600 }}>{quantReport?.compressionRatio}x ({quantReport?.spaceSavingsPercent}% saved)</span></div>
-            <div>Spatial Order: <span style={{ color: '#a78bfa' }}>3D Morton Z-Curve</span></div>
+            <div>Source: <span style={{ color: '#34d399', fontWeight: 600 }}>{loadedFileName}</span></div>
+            <div>Container: <span style={{ color: '#38bdf8' }}>.4DV v1 (4DV1 Magic)</span></div>
+            <div>Active Primitives: <span style={{ color: '#f8fafc', fontWeight: 600 }}>{stats.gaussianCount.toLocaleString()}</span></div>
+            <div>Quantized Size: <span style={{ color: '#38bdf8' }}>{((quantReport?.quantizedBytes || 0) / 1024).toFixed(1)} KB</span> ({quantReport?.compressionRatio}x CR)</div>
             <div>FPS: <span style={{ color: stats.fps >= 50 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>{stats.fps}</span> ({stats.frameTimeMs} ms)</div>
           </div>
 
@@ -458,8 +569,7 @@ export const App: React.FC = () => {
               <div>Dataset: <b>{benchmarkResult.gaussianCount.toLocaleString()} Gaussians</b></div>
               <div>Frames: <b>{benchmarkResult.frameCount} frames @ {benchmarkResult.fps} FPS</b></div>
               <div>Tested Sub-frame Samples: <b>{benchmarkResult.metrics.testedSamples.toLocaleString()}</b></div>
-              <div>Quantization: <b>16-bit Pos, 8-bit Color, 8-bit Alpha</b></div>
-              <div>Spatial Sorting: <b>Morton (Z-Curve) Interleaved Keys</b></div>
+              <div>Container Format: <b>.4DV Version 1 (4DV1)</b></div>
               <div>Max Position Error: <span style={{ color: '#34d399', fontWeight: 600 }}>{benchmarkResult.metrics.maxPositionError} units</span></div>
               <div>Mean Position Error (MAE): <span style={{ color: '#34d399', fontWeight: 600 }}>{benchmarkResult.metrics.meanPositionError} units</span></div>
               <div style={{ marginTop: '8px', padding: '6px 10px', borderRadius: '4px', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#34d399', fontWeight: 600 }}>
@@ -606,9 +716,9 @@ export const App: React.FC = () => {
         fontSize: '10px',
         color: '#64748b'
       }}>
-        <div>Quantization: 16-bit Pos / 8-bit Color & Alpha | 3D Morton Order</div>
-        <div>Compression Ratio: {quantReport?.compressionRatio}x ({quantReport?.spaceSavingsPercent}% saved)</div>
-        <div>6-DoF Flight Active</div>
+        <div>Container: Binary .4DV v1 (4DV1) Self-Contained Stream</div>
+        <div>Format: Static Block + Dynamic Block + TOC Headers</div>
+        <div>Status: Interactive Upload & Export Enabled</div>
       </footer>
     </div>
   );
