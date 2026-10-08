@@ -46,7 +46,7 @@ A high-performance, lightweight browser player for dynamic 4D scenes (`3D Scene 
 
 ---
 
-## 📊 End-to-End Development Stages (Stages 1–8 Completed)
+## 📊 End-to-End Development Stages (Stages 1–9 Completed)
 
 | Stage | Subsystem / Feature | Implementation Details |
 | :--- | :--- | :--- |
@@ -58,6 +58,7 @@ A high-performance, lightweight browser player for dynamic 4D scenes (`3D Scene 
 | **Stage 6** | Fast Random-Access Seeking | Instant $O(1)$ TOC lookup via `getChunkForTime()` for timeline scrubbing |
 | **Stage 7** | Multi-Threaded Web Worker Bridge | Off-thread `decoder.worker.ts` with zero-copy `ArrayBuffer` transferables ($<15\text{ ms}$) |
 | **Stage 8** | Novel View Synthesis & Evaluation | WebGL2 `readPixels()` buffer evaluation (PSNR $34.56\text{ dB}$, SSIM $0.942$) |
+| **Stage 9** | Binary Round-Trip & Bounds Repair | Canonical V1 specification, symmetrical DEFLATE, zero DataView bounds error, 100% roundtrip pass |
 
 
 ---

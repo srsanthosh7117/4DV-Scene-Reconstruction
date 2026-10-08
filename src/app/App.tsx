@@ -6,11 +6,12 @@ import {
   separateStaticDynamicGaussians,
   SeparationStats,
   runTemporalCompressionTest,
+  runDeterministicRoundTripTest,
   CompressionBenchmarkResult,
   quantizeAndOrderGaussians,
   QuantizationReport,
-  encode4DV,
-  decode4DV,
+  encode4DVAsync,
+  decode4DVAsync,
   Decoded4DScene,
 } from '../format';
 import { WorkerBridge } from '../workers';
@@ -73,6 +74,7 @@ export const App: React.FC = () => {
   const [activeSampleId, setActiveSampleId] = useState<string>('dynamic-helix');
   const [loadedScene, setLoadedScene] = useState<Decoded4DScene | null>(null);
   const [loadedFileName, setLoadedFileName] = useState<string>('Dynamic Dual-Helix Stream');
+  const [loadedFileSize, setLoadedFileSize] = useState<number | null>(null);
   const [decodeDurationMs, setDecodeDurationMs] = useState<number | null>(null);
 
   // UI Drawer & HUD State
@@ -221,23 +223,35 @@ export const App: React.FC = () => {
   }, [generatedData, addToast]);
 
   // Export current scene as real .4DV binary file
-  const handleExport4DV = () => {
-    const uint8 = encode4DV(generatedData.polynomials, {
-      title: loadedFileName,
-      description: 'Exported from 4DV Browser Player',
-      fps: 30,
-      duration: duration,
-    });
+  const handleExport4DV = async () => {
+    try {
+      const uint8 = await encode4DVAsync(generatedData.polynomials, {
+        title: loadedFileName,
+        description: 'Exported from 4DV Browser Player',
+        fps: 30,
+        duration: duration,
+        useQuantization: true,
+        chunkDuration: 1.0,
+        compressChunks: true,
+      });
 
-    const blob = new Blob([uint8.buffer as ArrayBuffer], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const safeName = loadedFileName.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    a.download = `${safeName}.4dv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    addToast(`Exported "${safeName}.4dv" (${(uint8.byteLength / 1024).toFixed(1)} KB)`, 'success');
+      const sliceBuffer =
+        uint8.byteOffset === 0 && uint8.byteLength === uint8.buffer.byteLength
+          ? (uint8.buffer as ArrayBuffer)
+          : (uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength) as ArrayBuffer);
+      const blob = new Blob([sliceBuffer], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safeName = loadedFileName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      a.download = `${safeName}.4dv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast(`Exported "${safeName}.4dv" (${(uint8.byteLength / 1024).toFixed(1)} KB · DEFLATE)`, 'success');
+    } catch (err) {
+      console.error('[App] Failed to export .4dv:', err);
+      addToast(err instanceof Error ? err.message : 'Export failed', 'warn');
+    }
   };
 
   // Process .4DV file buffer
@@ -252,12 +266,13 @@ export const App: React.FC = () => {
         decodeTimeMs = res.decodeTimeMs;
       } else {
         const startTime = performance.now();
-        decoded = decode4DV(buffer);
+        decoded = await decode4DVAsync(buffer);
         decodeTimeMs = parseFloat((performance.now() - startTime).toFixed(2));
       }
 
       setLoadedScene(decoded);
       setLoadedFileName(fileName);
+      setLoadedFileSize(buffer.byteLength);
       setDecodeDurationMs(decodeTimeMs);
       setDuration(decoded.header.duration);
 
@@ -303,6 +318,24 @@ export const App: React.FC = () => {
     if (file) {
       const buffer = await file.arrayBuffer();
       await process4DVBuffer(buffer, file.name);
+    }
+  };
+
+  // Phase 8-10 Round-Trip Suite Runner
+  const handleRunRoundTripTest = async () => {
+    try {
+      addToast('Executing Phase 8-10 Deterministic Round-Trip Suite...', 'info');
+      const res = await runDeterministicRoundTripTest();
+      if (res.passed) {
+        addToast(
+          `✓ Round-Trip Suite Passed! Uncompressed (${res.uncompressedSize}B) & Compressed (${res.compressedSize}B) validated. MAE: ${res.positionMAE.toFixed(6)}`,
+          'success'
+        );
+      } else {
+        addToast(`Round-Trip Failed: ${res.details}`, 'warn');
+      }
+    } catch (e) {
+      addToast(`Round-trip error: ${e instanceof Error ? e.message : 'Unknown error'}`, 'warn');
     }
   };
 
@@ -864,14 +897,85 @@ export const App: React.FC = () => {
                       </span>
                     </div>
 
-                    {decodeDurationMs !== null && (
+                    {/* Real .4DV Container Metadata Inspector (Phase 12) */}
+                    <div style={{
+                      marginTop: '6px',
+                      padding: '8px',
+                      background: 'rgba(0, 0, 0, 0.4)',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '4px',
+                      fontSize: '10px'
+                    }}>
+                      <div style={{
+                        color: 'var(--accent-sky)',
+                        fontWeight: 700,
+                        borderBottom: '1px solid rgba(255,255,255,0.08)',
+                        paddingBottom: '3px',
+                        marginBottom: '2px',
+                        display: 'flex',
+                        justifyContent: 'space-between'
+                      }}>
+                        <span>📦 .4DV Container Metadata</span>
+                        <span>v{loadedScene?.header.version || 1}</span>
+                      </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>Worker Decode Speed</span>
-                        <span style={{ color: 'var(--accent-emerald)', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-                          {decodeDurationMs} ms
+                        <span style={{ color: 'var(--text-muted)' }}>Source:</span>
+                        <span style={{ color: '#ffffff', fontFamily: 'var(--font-mono)', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {loadedFileName}
                         </span>
                       </div>
-                    )}
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>File Size:</span>
+                        <span style={{ color: 'var(--accent-emerald)', fontFamily: 'var(--font-mono)' }}>
+                          {loadedFileSize !== null ? `${(loadedFileSize / 1024).toFixed(1)} KB` : 'Dynamic Stream'}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Timeline:</span>
+                        <span style={{ color: '#ffffff', fontFamily: 'var(--font-mono)' }}>
+                          {loadedScene?.header.frameCount || Math.floor(duration * 30)} f @ {loadedScene?.header.fps || 30} FPS ({(loadedScene?.header.duration || duration).toFixed(1)}s)
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Static / Dynamic:</span>
+                        <span style={{ color: '#ffffff', fontFamily: 'var(--font-mono)' }}>
+                          {(loadedScene?.header.staticGaussians ?? separationStats?.staticCount ?? 0).toLocaleString()} / {(loadedScene?.header.dynamicGaussians ?? separationStats?.dynamicCount ?? 0).toLocaleString()}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Temporal Chunks:</span>
+                        <span style={{ color: 'var(--accent-purple)', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                          {loadedScene ? loadedScene.toc.filter((t) => t.chunkId > 0).length : Math.ceil(duration / 1.0)} chunks ({loadedScene ? loadedScene.toc.length : 1 + Math.ceil(duration / 1.0)} TOC entries)
+                        </span>
+                      </div>
+                      {decodeDurationMs !== null && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Worker Decode:</span>
+                          <span style={{ color: 'var(--accent-emerald)', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                            {decodeDurationMs} ms
+                          </span>
+                        </div>
+                      )}
+                      <button
+                        onClick={handleRunRoundTripTest}
+                        style={{
+                          marginTop: '6px',
+                          background: 'rgba(56, 189, 248, 0.15)',
+                          border: '1px solid rgba(56, 189, 248, 0.35)',
+                          color: 'var(--accent-sky)',
+                          padding: '4px 6px',
+                          borderRadius: '4px',
+                          fontSize: '9px',
+                          fontWeight: 700,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ⚡ Run Format Round-Trip Test Suite
+                      </button>
+                    </div>
                   </div>
                 )}
 
