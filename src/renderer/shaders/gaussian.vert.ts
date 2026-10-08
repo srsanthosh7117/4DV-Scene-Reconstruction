@@ -1,13 +1,11 @@
 /**
- * Vertex Shader for 3D Gaussian Splats in WebGL2 (#version 300 es).
+ * Vertex Shader for 4D Temporal Gaussian Splats in WebGL2 (#version 300 es).
  *
- * How it works:
- * 1. Takes instance attributes (Gaussian center position, scale, color, opacity).
- * 2. Takes a 2D billboard quad corner [-2.0, +2.0] for instanced rendering.
- * 3. Transforms Gaussian center into camera/view space (u_view * u_model * vec4(pos, 1.0)).
- * 4. Expands the quad corners directly in view space along camera-aligned X and Y axes (billboard).
- * 5. Projects the billboard vertex into clip space (u_projection * viewPos).
- * 6. Passes normalized quad UV coordinates, color, and opacity to fragment shader.
+ * GPU-Side 4D Trajectory Evaluation:
+ * P(t) = P0 + P1*t + P2*t^2 + Amplitude * sin(Freq * t + Phase)
+ *
+ * This performs exact temporal motion evaluation inside the GPU vertex shader,
+ * avoiding expensive CPU-to-GPU transfers on every playback frame.
  */
 
 export const GAUSSIAN_VERTEX_SHADER = `#version 300 es
@@ -16,16 +14,22 @@ precision highp float;
 // Per-vertex quad mesh attributes (billboard corners: [-2, -2] to [+2, +2])
 layout(location = 0) in vec2 a_quadCorner;
 
-// Per-instance Gaussian attributes
-layout(location = 1) in vec3 a_position;
-layout(location = 2) in vec3 a_scale;
-layout(location = 3) in vec3 a_color;
-layout(location = 4) in float a_opacity;
+// Per-instance 4D Gaussian Base Attributes
+layout(location = 1) in vec3 a_position;   // P0: Base 3D Position
+layout(location = 2) in vec3 a_scale;      // Splat 3D Scale
+layout(location = 3) in vec3 a_color;      // RGB Color [0..1]
+layout(location = 4) in float a_opacity;   // Base Opacity [0..1]
 
-// Transform Uniforms
+// Per-instance Temporal Motion Coefficients
+layout(location = 5) in vec3 a_velocity;   // P1: Linear Velocity
+layout(location = 6) in vec3 a_accel;      // P2: Acceleration / Quadratic coefficient
+layout(location = 7) in vec3 a_harmonic;   // Harmonic params: [Amplitude, Frequency, Phase]
+
+// Transform & Time Uniforms
 uniform mat4 u_projection;
 uniform mat4 u_view;
 uniform mat4 u_model;
+uniform float u_time;                      // Current playback timestamp t
 
 // Outputs to Fragment Shader
 out vec2 v_uv;
@@ -37,14 +41,28 @@ void main() {
     v_color = a_color;
     v_opacity = a_opacity;
 
-    // Transform Gaussian center into camera view space
-    vec4 viewCenter = u_view * u_model * vec4(a_position, 1.0);
+    // 1. Evaluate 4D Trajectory at time t on GPU
+    float t = u_time;
+    float t2 = t * t;
 
-    // Expand billboard quad in camera space based on Gaussian scale
+    // Polynomial trajectory P(t) = P0 + P1*t + P2*t^2
+    vec3 animatedPos = a_position + a_velocity * t + a_accel * t2;
+
+    // Add harmonic oscillation if amplitude > 0
+    if (a_harmonic.x > 0.0) {
+        float osc = sin(a_harmonic.y * t + a_harmonic.z);
+        animatedPos.y += a_harmonic.x * osc;
+        animatedPos.x += (a_harmonic.x * 0.5) * cos(a_harmonic.y * t + a_harmonic.z);
+    }
+
+    // 2. Transform Gaussian center into camera view space
+    vec4 viewCenter = u_view * u_model * vec4(animatedPos, 1.0);
+
+    // 3. Expand billboard quad in camera space based on Gaussian scale
     vec4 viewPos = viewCenter;
     viewPos.xy += a_quadCorner * a_scale.xy;
 
-    // Transform to clip space
+    // 4. Transform to clip space
     gl_Position = u_projection * viewPos;
 }
 `;

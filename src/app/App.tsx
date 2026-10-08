@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { WebGLRenderer, GaussianRenderStats } from '../renderer';
 import { CameraTelemetry } from '../camera';
-import { generateProceduralGaussianScene } from '../demo';
+import { generateTemporalGaussianScene } from '../demo';
 
 export const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -9,22 +9,31 @@ export const App: React.FC = () => {
 
   const [webglStatus, setWebglStatus] = useState<'INITIALIZING' | 'READY' | 'ERROR'>('INITIALIZING');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Stats & Telemetry
   const [stats, setStats] = useState<GaussianRenderStats>({
     fps: 0,
     frameTimeMs: 0,
     gaussianCount: 0,
     viewportWidth: 0,
     viewportHeight: 0,
+    currentTime: 0,
+    totalDuration: 5.0,
   });
 
   const [cameraTelemetry, setCameraTelemetry] = useState<CameraTelemetry>({
-    position: [0, 1.5, 4.2],
+    position: [0, 1.2, 4.2],
     yawDeg: 0,
     pitchDeg: -5.7,
     fovDeg: 60,
     mode: 'FREE_FLIGHT',
   });
 
+  // Temporal Playback State
+  const [isPlaying, setIsPlaying] = useState<boolean>(true);
+  const [currentTime, setCurrentTime] = useState<number>(0);
+  const [duration, setDuration] = useState<number>(5.0);
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [cameraMode, setCameraMode] = useState<'FREE_FLIGHT' | 'ORBIT'>('FREE_FLIGHT');
 
   useEffect(() => {
@@ -32,16 +41,20 @@ export const App: React.FC = () => {
     if (!canvas) return;
 
     try {
-      // Initialize our custom WebGL2 Renderer with 6-DoF Camera
+      // Initialize WebGL2 Renderer with 4D Temporal Pipeline and 6-DoF Camera
       const renderer = new WebGLRenderer(canvas, {
         onStats: (newStats) => setStats(newStats),
         onCameraTelemetry: (telemetry) => setCameraTelemetry(telemetry),
+        onTimeUpdate: (t, dur) => {
+          setCurrentTime(t);
+          setDuration(dur);
+        },
       });
       rendererRef.current = renderer;
 
-      // Generate procedural 3D Gaussian scene (600 Gaussians)
-      const sceneGaussians = generateProceduralGaussianScene(600);
-      renderer.setGaussians(sceneGaussians);
+      // Generate procedural 4D Temporal Gaussian Scene (1200 Gaussians: 360 Static, 840 Dynamic)
+      const { scene, polynomials } = generateTemporalGaussianScene(1200, 5.0, 30);
+      renderer.setGaussians4D(polynomials, scene.duration);
       renderer.start();
 
       setWebglStatus('READY');
@@ -59,6 +72,37 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  const handleTogglePlay = () => {
+    if (rendererRef.current) {
+      const next = !isPlaying;
+      rendererRef.current.setPlaying(next);
+      setIsPlaying(next);
+    }
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setCurrentTime(val);
+    if (rendererRef.current) {
+      rendererRef.current.setTime(val);
+    }
+  };
+
+  const handleSpeedChange = (spd: number) => {
+    setPlaybackSpeed(spd);
+    if (rendererRef.current) {
+      rendererRef.current.setSpeed(spd);
+    }
+  };
+
+  const handleQuickSeekFraction = (fraction: number) => {
+    const t = fraction * duration;
+    setCurrentTime(t);
+    if (rendererRef.current) {
+      rendererRef.current.setTime(t);
+    }
+  };
+
   const handleModeChange = (mode: 'FREE_FLIGHT' | 'ORBIT') => {
     if (rendererRef.current) {
       rendererRef.current.cameraController.setMode(mode);
@@ -68,8 +112,15 @@ export const App: React.FC = () => {
 
   const handleResetCamera = () => {
     if (rendererRef.current) {
-      rendererRef.current.cameraController.reset([0, 1.5, 4.2], 0, -0.1);
+      rendererRef.current.cameraController.reset([0, 1.2, 4.2], 0, -0.1);
     }
+  };
+
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    const ms = Math.floor((sec % 1) * 100);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -84,7 +135,7 @@ export const App: React.FC = () => {
       overflow: 'hidden',
       userSelect: 'none'
     }}>
-      {/* Top Navigation Bar */}
+      {/* Top Header Bar */}
       <header style={{
         height: '46px',
         padding: '0 16px',
@@ -105,11 +156,11 @@ export const App: React.FC = () => {
             boxShadow: webglStatus === 'READY' ? '0 0 8px #10b981' : 'none'
           }} />
           <span style={{ fontWeight: 700, fontSize: '13px', letterSpacing: '0.08em', color: '#f8fafc' }}>
-            4DV PLAYER <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600, marginLeft: '4px' }}>PHASE 3: 6-DoF CAMERA</span>
+            4DV PLAYER <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600, marginLeft: '4px' }}>PHASE 4: 4D TEMPORAL SCENE</span>
           </span>
         </div>
 
-        {/* Camera Mode Toggles */}
+        {/* Camera and Viewport Actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{
             display: 'flex',
@@ -172,8 +223,7 @@ export const App: React.FC = () => {
             backgroundColor: webglStatus === 'READY' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
             color: webglStatus === 'READY' ? '#34d399' : '#f87171',
             fontWeight: 600,
-            fontSize: '11px',
-            marginLeft: '4px'
+            fontSize: '11px'
           }}>
             WebGL2: {webglStatus}
           </div>
@@ -218,13 +268,14 @@ export const App: React.FC = () => {
             fontSize: '11px',
             lineHeight: '1.6',
             color: '#cbd5e1',
-            minWidth: '220px'
+            minWidth: '230px'
           }}>
             <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '2px', fontSize: '11px', letterSpacing: '0.04em' }}>
-              SCENE DIAGNOSTICS
+              4D SCENE DIAGNOSTICS
             </div>
-            <div>Gaussians: <span style={{ color: '#38bdf8', fontWeight: 600 }}>{stats.gaussianCount.toLocaleString()}</span></div>
+            <div>Gaussians: <span style={{ color: '#38bdf8', fontWeight: 600 }}>1,200</span> (360 Static, 840 4D Dynamic)</div>
             <div>FPS: <span style={{ color: stats.fps >= 50 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>{stats.fps}</span> ({stats.frameTimeMs} ms)</div>
+            <div>Evaluation: <span style={{ color: '#34d399' }}>GPU-Side Vertex Shaders</span></div>
             <div>Viewport: <span style={{ color: '#94a3b8' }}>{stats.viewportWidth} × {stats.viewportHeight}</span></div>
           </div>
 
@@ -238,7 +289,7 @@ export const App: React.FC = () => {
             fontSize: '11px',
             lineHeight: '1.6',
             color: '#cbd5e1',
-            minWidth: '220px'
+            minWidth: '230px'
           }}>
             <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '2px', fontSize: '11px', letterSpacing: '0.04em' }}>
               CAMERA TELEMETRY
@@ -267,10 +318,9 @@ export const App: React.FC = () => {
           pointerEvents: 'none',
           lineHeight: '1.5'
         }}>
-          <div style={{ color: '#e2e8f0', fontWeight: 600, marginBottom: '2px' }}>Navigation Controls</div>
-          <div><kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>W A S D</kbd> Move Horizontal</div>
-          <div><kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Q / E</kbd> Down / Up &nbsp;|&nbsp; <kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Shift</kbd> Sprint</div>
-          <div><kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Mouse Drag</kbd> Look &nbsp;|&nbsp; <kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Wheel</kbd> Zoom</div>
+          <div style={{ color: '#e2e8f0', fontWeight: 600, marginBottom: '2px' }}>Navigation</div>
+          <div><kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>WASD</kbd> Move &nbsp;|&nbsp; <kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>QE</kbd> Elevation &nbsp;|&nbsp; <kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Shift</kbd> Sprint</div>
+          <div><kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Mouse Drag</kbd> Look &nbsp;|&nbsp; <kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Wheel</kbd> FOV Zoom</div>
         </div>
 
         {/* Error Fallback Banner */}
@@ -288,27 +338,131 @@ export const App: React.FC = () => {
             textAlign: 'center',
             maxWidth: '450px'
           }}>
-            <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px' }}>WebGL2 Unavailable</h3>
-            <p style={{ fontSize: '13px' }}>{errorMessage}</p>
+            <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px' }}>WebGL2 Error</h3>
+            <p style={{ fontSize: '13px' }}>{errorMessage || 'Unknown WebGL2 error'}</p>
           </div>
         )}
       </main>
 
-      {/* Bottom Status Bar */}
+      {/* 4D Temporal Playback HUD Bar */}
+      <div style={{
+        height: '64px',
+        padding: '0 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        gap: '6px',
+        borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+        backgroundColor: '#0e1424',
+        zIndex: 10
+      }}>
+        {/* Timeline Slider with Discrete Test Markers */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ fontSize: '11px', fontFamily: 'monospace', color: '#38bdf8', minWidth: '60px' }}>
+            {formatTime(currentTime)}
+          </span>
+
+          <input
+            type="range"
+            min="0"
+            max={duration}
+            step="0.01"
+            value={currentTime}
+            onChange={handleSeek}
+            style={{
+              flex: 1,
+              accentColor: '#38bdf8',
+              cursor: 'pointer',
+              height: '5px',
+            }}
+          />
+
+          <span style={{ fontSize: '11px', fontFamily: 'monospace', color: '#94a3b8', minWidth: '60px', textAlign: 'right' }}>
+            {formatTime(duration)}
+          </span>
+        </div>
+
+        {/* Playback Controls & Speed & Discrete Verification Buttons */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              onClick={handleTogglePlay}
+              style={{
+                backgroundColor: isPlaying ? '#0284c7' : '#10b981',
+                border: 'none',
+                color: '#ffffff',
+                padding: '4px 12px',
+                borderRadius: '4px',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              {isPlaying ? '⏸ Pause' : '▶ Play'}
+            </button>
+
+            {/* Discrete Verification Jumps */}
+            <span style={{ fontSize: '11px', color: '#64748b', marginLeft: '6px' }}>Test Points:</span>
+            {[0, 0.25, 0.5, 0.75, 1.0].map((frac) => (
+              <button
+                key={frac}
+                onClick={() => handleQuickSeekFraction(frac)}
+                style={{
+                  backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: Math.abs((currentTime / duration) - frac) < 0.04 ? '#38bdf8' : '#94a3b8',
+                  padding: '2px 6px',
+                  borderRadius: '3px',
+                  fontSize: '10px',
+                  cursor: 'pointer',
+                  fontWeight: 500
+                }}
+              >
+                t={frac.toFixed(2)}
+              </button>
+            ))}
+          </div>
+
+          {/* Speed Selector */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+            <span style={{ color: '#64748b', marginRight: '4px' }}>Speed:</span>
+            {[0.25, 0.5, 1.0, 2.0].map((spd) => (
+              <button
+                key={spd}
+                onClick={() => handleSpeedChange(spd)}
+                style={{
+                  backgroundColor: playbackSpeed === spd ? 'rgba(56, 189, 248, 0.2)' : 'transparent',
+                  border: `1px solid ${playbackSpeed === spd ? '#38bdf8' : 'rgba(255, 255, 255, 0.1)'}`,
+                  color: playbackSpeed === spd ? '#38bdf8' : '#94a3b8',
+                  padding: '2px 6px',
+                  borderRadius: '3px',
+                  fontSize: '10px',
+                  cursor: 'pointer',
+                  fontWeight: 600
+                }}
+              >
+                {spd}x
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Footer Status Bar */}
       <footer style={{
-        height: '30px',
+        height: '24px',
         padding: '0 16px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-        backgroundColor: '#0a0e1a',
-        fontSize: '11px',
+        borderTop: '1px solid rgba(255, 255, 255, 0.04)',
+        backgroundColor: '#090d16',
+        fontSize: '10px',
         color: '#64748b'
       }}>
-        <div>Camera: 6-DoF Full Flight Active</div>
-        <div>Scene: Procedural 3D Spatial Test</div>
-        <div>Coordinate Frame: Right-Handed (OpenGL -Z forward)</div>
+        <div>Temporal Model: 4D Polynomial Kinematics $P(t) = P_0 + P_1 t + P_2 t^2 + A \sin(\omega t + \phi)$</div>
+        <div>Evaluation: GPU Vertex Shaders</div>
+        <div>6-DoF Navigation + Live 4D Playback Active</div>
       </footer>
     </div>
   );

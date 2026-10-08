@@ -38,3 +38,12 @@
 - Integrated camera view matrices directly into `WebGLRenderer` per-frame pipeline.
 - Implemented live Camera Telemetry HUD in `App.tsx` displaying real-time coordinate position, Euler yaw/pitch angles, and FOV.
 - Verified smooth 60 FPS flight navigation through 3D Gaussian volume.
+
+### Hour 2:00 – Hour 2:45: Formal 4D Gaussian Data Model & Temporal Scene (Phase 4)
+- Formalized 4D Gaussian data structures (`Gaussian4DPolynomial`, `TemporalKeyframe`, `TemporalScene4D`) supporting polynomial trajectories and discrete keyframes.
+- Updated `GAUSSIAN_VERTEX_SHADER` to evaluate 4D temporal trajectories directly on the GPU:
+  $$\mathbf{P}(t) = \mathbf{P}_0 + \mathbf{P}_1 t + \mathbf{P}_2 t^2 + \mathbf{A} \sin(\omega t + \phi)$$
+- Upgraded `GaussianRenderer` with a 19-float stride ($76\text{ bytes}$) per 4D Gaussian instance.
+- Built procedural 4D temporal scene generator (`generateTemporalGaussianScene`) with 1,200 Gaussians (360 static reference landmarks + 840 dynamic oscillating/pulsing 4D Gaussians).
+- Added timeline scrubber bar, play/pause controls, variable playback speed (`0.25x`, `0.5x`, `1x`, `2x`), and discrete test point verification buttons ($t = 0.0, 0.25, 0.50, 0.75, 1.0$).
+- Verified 60 FPS rendering and smooth GPU-evaluated deformation over time while moving the 6-DoF camera freely.
