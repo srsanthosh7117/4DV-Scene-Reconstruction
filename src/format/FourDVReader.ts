@@ -38,25 +38,145 @@ export function getChunkForTime(toc: FourDVTocEntry[], time: number): FourDVTocE
 }
 
 /**
- * Parses container header (96 bytes) from .4DV buffer.
+ * Detects if the buffer uses the JSON-header variant (e.g. from Python encoders like fourdv_encode.py).
+ * In the JSON variant:
+ * - Bytes 0..3: '4DV1' magic
+ * - Bytes 4..7: version (uint32)
+ * - Bytes 8..11: json_len (uint32)
+ * - Bytes 12..: UTF-8 JSON text starting with '{' (0x7B)
+ */
+export function isJsonHeaderVariant(dataView: DataView): boolean {
+  if (dataView.byteLength < 14) return false;
+  const magic = dataView.getUint32(0, true);
+  if (magic !== FOURDV_MAGIC && magic !== 0x34445631) return false;
+  const b12 = dataView.getUint8(12);
+  return b12 === 0x7b; // ASCII '{'
+}
+
+/**
+ * Parses Python / JSON-Header variant metadata from .4DV container.
+ */
+export function parseJsonHeaderVariant(buffer: ArrayBuffer | Uint8Array): {
+  header: FourDVHeader;
+  json: Record<string, any>;
+  binaryOffset: number;
+} {
+  const arrayBuffer = buffer instanceof Uint8Array ? buffer.buffer : buffer;
+  const byteOffset = buffer instanceof Uint8Array ? buffer.byteOffset : 0;
+  const totalByteLength = buffer.byteLength;
+  const dataView = new DataView(arrayBuffer, byteOffset, totalByteLength);
+
+  checkBounds(dataView, 0, 12, 'jsonVariantHeaderPrefix');
+  const magic = dataView.getUint32(0, true);
+  const version = dataView.getUint32(4, true);
+  const jsonLen = dataView.getUint32(8, true);
+
+  if (12 + jsonLen > totalByteLength) {
+    throw new Error(
+      `4DV_FORMAT_ERROR: JSON header length ${jsonLen} extends beyond file size ${totalByteLength}`
+    );
+  }
+
+  const jsonBytes = new Uint8Array(arrayBuffer, byteOffset + 12, jsonLen);
+  const jsonText = new TextDecoder('utf-8').decode(jsonBytes);
+  let json: Record<string, any> = {};
+  try {
+    json = JSON.parse(jsonText);
+  } catch (err) {
+    throw new Error(`4DV_FORMAT_ERROR: Failed to parse JSON header: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const frameCount = json.frameCount ?? json.frame_count ?? json.num_frames ?? json.frames ?? 30;
+  const fps = json.fps ?? json.frame_rate ?? json.FPS ?? 30.0;
+  const duration = json.duration ?? json.time_end ?? json.duration_sec ?? 5.0;
+
+  const totalGaussians =
+    json.totalGaussians ??
+    json.total_gaussians ??
+    json.num_gaussians ??
+    json.gaussian_count ??
+    json.count ??
+    0;
+  const staticGaussians =
+    json.staticGaussians ?? json.static_gaussians ?? json.num_static ?? json.static_count ?? 0;
+  const dynamicGaussians =
+    json.dynamicGaussians ??
+    json.dynamic_gaussians ??
+    json.num_dynamic ??
+    json.dynamic_count ??
+    (totalGaussians > staticGaussians ? totalGaussians - staticGaussians : totalGaussians);
+
+  const boundsMin: [number, number, number] = json.boundsMin ?? json.bounds_min ?? json.bbox_min ?? json.min_bounds ?? [-5, -5, -5];
+  const boundsMax: [number, number, number] = json.boundsMax ?? json.bounds_max ?? json.bbox_max ?? json.max_bounds ?? [5, 5, 5];
+  const scaleMax = json.scaleMax ?? json.scale_max ?? json.max_scale ?? 1.0;
+  const velMax = json.velMax ?? json.vel_max ?? json.max_vel ?? json.velocity_max ?? 1.0;
+  const accelMax = json.accelMax ?? json.accel_max ?? json.max_accel ?? 1.0;
+  const harmonicMax: [number, number, number] = json.harmonicMax ?? json.harmonic_max ?? json.harmonics ?? [1.0, 1.0, Math.PI * 2];
+
+  const binaryOffset = 12 + jsonLen;
+  const binaryLength = totalByteLength - binaryOffset;
+
+  const recordStride = json.record_size ?? json.stride ?? json.bytes_per_gaussian ?? (totalGaussians > 0 ? Math.floor(binaryLength / totalGaussians) : 32);
+  const effectiveTotal = totalGaussians || Math.floor(binaryLength / (recordStride || 32));
+
+  const chunksCount = Array.isArray(json.chunks) ? json.chunks.length : (Array.isArray(json.toc) ? json.toc.length : 1);
+
+  const header: FourDVHeader = {
+    magic,
+    version: typeof version === 'number' ? version : 1,
+    flags: FourDVFlags.HAS_STATIC_SPLIT | (json.compressed ? FourDVFlags.IS_COMPRESSED : 0) | (json.quantized ? FourDVFlags.IS_QUANTIZED : 0),
+    frameCount,
+    fps: fps > 0 ? fps : 30.0,
+    duration: duration > 0 ? duration : 5.0,
+    totalGaussians: effectiveTotal,
+    staticGaussians: staticGaussians || 0,
+    dynamicGaussians: dynamicGaussians || effectiveTotal,
+    boundsMin,
+    boundsMax,
+    scaleMax: scaleMax || 1.0,
+    velMax: velMax || 1.0,
+    accelMax: accelMax || 1.0,
+    harmonicMax: Array.isArray(harmonicMax) && harmonicMax.length === 3 ? harmonicMax : [1.0, 1.0, Math.PI * 2],
+    tocOffset: binaryOffset,
+    tocEntries: chunksCount,
+  };
+
+  console.log(`[4DV] Detected JSON-Header Variant (jsonSize=${jsonLen}B, totalGaussians=${effectiveTotal}, duration=${header.duration}s, fps=${header.fps})`);
+
+  return { header, json, binaryOffset };
+}
+
+/**
+ * Parses container header (96 bytes binary OR auto-detecting JSON header) from .4DV buffer.
  */
 export function parseHeader(buffer: ArrayBuffer | Uint8Array): FourDVHeader {
   const arrayBuffer = buffer instanceof Uint8Array ? buffer.buffer : buffer;
   const byteOffset = buffer instanceof Uint8Array ? buffer.byteOffset : 0;
   const totalByteLength = buffer.byteLength;
 
-  if (totalByteLength < FOURDV_HEADER_SIZE) {
+  if (totalByteLength < 14) {
     throw new Error(
-      `4DV_FORMAT_ERROR: Buffer too small for .4DV header. size=${totalByteLength} required=${FOURDV_HEADER_SIZE}`
+      `4DV_FORMAT_ERROR: Buffer too small for .4DV header. size=${totalByteLength} required>=14`
     );
   }
 
   const dataView = new DataView(arrayBuffer, byteOffset, totalByteLength);
 
+  // 0. Auto-detect Python / JSON-Header Variant
+  if (isJsonHeaderVariant(dataView)) {
+    return parseJsonHeaderVariant(buffer).header;
+  }
+
+  if (totalByteLength < FOURDV_HEADER_SIZE) {
+    throw new Error(
+      `4DV_FORMAT_ERROR: Buffer too small for canonical 96-byte .4DV header. size=${totalByteLength} required=${FOURDV_HEADER_SIZE}`
+    );
+  }
+
   // 1. Validate Magic '4DV1'
   checkBounds(dataView, 0, 4, 'magic');
   const magic = dataView.getUint32(0, true);
-  if (magic !== FOURDV_MAGIC) {
+  if (magic !== FOURDV_MAGIC && magic !== 0x34445631) {
     throw new Error(
       `4DV_FORMAT_ERROR: Invalid container magic. Expected 0x${FOURDV_MAGIC.toString(16)} ('4DV1'), received 0x${magic.toString(16)}.`
     );
@@ -150,8 +270,54 @@ export function parseToc(buffer: ArrayBuffer | Uint8Array, header: FourDVHeader)
   const totalByteLength = buffer.byteLength;
 
   const dataView = new DataView(arrayBuffer, byteOffset, totalByteLength);
-  const tocSize = header.tocEntries * FOURDV_TOC_ENTRY_SIZE;
 
+  // Auto-detect JSON-Header Variant
+  if (isJsonHeaderVariant(dataView)) {
+    const { json, binaryOffset } = parseJsonHeaderVariant(buffer);
+    const chunks = json.chunks || json.toc;
+
+    if (Array.isArray(chunks) && chunks.length > 0) {
+      const toc: FourDVTocEntry[] = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const c = chunks[i];
+        const chunkId = c.chunk_id ?? c.id ?? (i + 1);
+        const timeStart = c.time_start ?? c.start_time ?? 0.0;
+        const timeEnd = c.time_end ?? c.end_time ?? header.duration;
+        const fileOffset = binaryOffset + (c.offset ?? c.file_offset ?? 0);
+        const byteLength = c.size ?? c.byte_length ?? c.length ?? 0;
+        const uncompressedLength = c.uncompressed_size ?? c.raw_size ?? byteLength;
+        const gaussianCount = c.count ?? c.gaussian_count ?? c.num_gaussians ?? header.dynamicGaussians;
+        const flags = c.flags ?? (c.compressed ? FourDVFlags.IS_COMPRESSED : 0);
+
+        toc.push({
+          chunkId,
+          timeStart,
+          timeEnd,
+          fileOffset,
+          byteLength,
+          uncompressedLength,
+          gaussianCount,
+          flags,
+        });
+      }
+      return toc;
+    }
+
+    return [
+      {
+        chunkId: 1,
+        timeStart: 0.0,
+        timeEnd: header.duration,
+        fileOffset: binaryOffset,
+        byteLength: totalByteLength - binaryOffset,
+        uncompressedLength: totalByteLength - binaryOffset,
+        gaussianCount: header.totalGaussians,
+        flags: 0,
+      },
+    ];
+  }
+
+  const tocSize = header.tocEntries * FOURDV_TOC_ENTRY_SIZE;
   checkBounds(dataView, header.tocOffset, tocSize, 'TOC_TABLE');
 
   const toc: FourDVTocEntry[] = [];
@@ -280,12 +446,73 @@ export async function readChunkAsync(
     return outFloats;
   } else {
     const dynamicCount = entry.gaussianCount;
-    const bytesPerElem = isQuantized ? DYNAMIC_GAUSSIAN_QUANTIZED_BYTES : DYNAMIC_GAUSSIAN_FLOAT32_BYTES;
-    checkBounds(dataView, 0, dynamicCount * bytesPerElem, `DYNAMIC_CHUNK_${entry.chunkId}_DATA`);
+    const stride = dynamicCount > 0 ? Math.floor(chunkBytes.byteLength / dynamicCount) : 34;
 
     const outFloats = new Float32Array(dynamicCount * 19);
 
-    if (isQuantized) {
+    if (stride === 32) {
+      let offset = 0;
+      for (let i = 0; i < dynamicCount; i++) {
+        const dst = i * 19;
+        const fx = dataView.getFloat32(offset + 0, true);
+        const fy = dataView.getFloat32(offset + 4, true);
+        const fz = dataView.getFloat32(offset + 8, true);
+        const isFloatPos =
+          isFinite(fx) && isFinite(fy) && isFinite(fz) && Math.abs(fx) < 10000 && Math.abs(fy) < 10000 && Math.abs(fz) < 10000;
+
+        if (isFloatPos) {
+          outFloats[dst + 0] = fx;
+          outFloats[dst + 1] = fy;
+          outFloats[dst + 2] = fz;
+
+          outFloats[dst + 3] = (dataView.getUint16(offset + 12, true) / 65535) * sMax;
+          outFloats[dst + 4] = (dataView.getUint16(offset + 14, true) / 65535) * sMax;
+          outFloats[dst + 5] = (dataView.getUint16(offset + 16, true) / 65535) * sMax;
+
+          outFloats[dst + 6] = dataView.getUint8(offset + 18) / 255;
+          outFloats[dst + 7] = dataView.getUint8(offset + 19) / 255;
+          outFloats[dst + 8] = dataView.getUint8(offset + 20) / 255;
+          outFloats[dst + 9] = dataView.getUint8(offset + 21) / 255;
+
+          outFloats[dst + 10] = (dataView.getInt16(offset + 22, true) / 32767) * vMax;
+          outFloats[dst + 11] = (dataView.getInt16(offset + 24, true) / 32767) * vMax;
+          outFloats[dst + 12] = (dataView.getInt16(offset + 26, true) / 32767) * vMax;
+
+          outFloats[dst + 13] = (dataView.getInt16(offset + 28, true) / 32767) * aMax;
+          outFloats[dst + 14] = (dataView.getInt16(offset + 30, true) / 32767) * aMax;
+          outFloats[dst + 15] = 0;
+          outFloats[dst + 16] = 0;
+          outFloats[dst + 17] = 0;
+          outFloats[dst + 18] = 0;
+        } else {
+          outFloats[dst + 0] = header.boundsMin[0] + (dataView.getUint16(offset + 0, true) / 65535) * dx;
+          outFloats[dst + 1] = header.boundsMin[1] + (dataView.getUint16(offset + 2, true) / 65535) * dy;
+          outFloats[dst + 2] = header.boundsMin[2] + (dataView.getUint16(offset + 4, true) / 65535) * dz;
+
+          outFloats[dst + 3] = (dataView.getUint16(offset + 6, true) / 65535) * sMax;
+          outFloats[dst + 4] = (dataView.getUint16(offset + 8, true) / 65535) * sMax;
+          outFloats[dst + 5] = (dataView.getUint16(offset + 10, true) / 65535) * sMax;
+
+          outFloats[dst + 6] = dataView.getUint8(offset + 12) / 255;
+          outFloats[dst + 7] = dataView.getUint8(offset + 13) / 255;
+          outFloats[dst + 8] = dataView.getUint8(offset + 14) / 255;
+          outFloats[dst + 9] = dataView.getUint8(offset + 15) / 255;
+
+          outFloats[dst + 10] = (dataView.getInt16(offset + 16, true) / 32767) * vMax;
+          outFloats[dst + 11] = (dataView.getInt16(offset + 18, true) / 32767) * vMax;
+          outFloats[dst + 12] = (dataView.getInt16(offset + 20, true) / 32767) * vMax;
+
+          outFloats[dst + 13] = (dataView.getInt16(offset + 22, true) / 32767) * aMax;
+          outFloats[dst + 14] = (dataView.getInt16(offset + 24, true) / 32767) * aMax;
+          outFloats[dst + 15] = (dataView.getInt16(offset + 26, true) / 32767) * aMax;
+
+          outFloats[dst + 16] = (dataView.getUint16(offset + 28, true) / 65535) * header.harmonicMax[0];
+          outFloats[dst + 17] = (dataView.getUint16(offset + 30, true) / 65535) * header.harmonicMax[1];
+          outFloats[dst + 18] = 0;
+        }
+        offset += 32;
+      }
+    } else if (isQuantized || stride === 34) {
       let offset = 0;
       for (let i = 0; i < dynamicCount; i++) {
         const dst = i * 19;
@@ -347,6 +574,7 @@ export async function decode4DVAsync(buffer: ArrayBuffer | Uint8Array): Promise<
   const arrayBuffer = buffer instanceof Uint8Array ? buffer.buffer : buffer;
   const byteOffset = buffer instanceof Uint8Array ? buffer.byteOffset : 0;
   const totalByteLength = buffer.byteLength;
+  const dataView = new DataView(arrayBuffer, byteOffset, totalByteLength);
 
   console.log(`[4DV] File size: ${totalByteLength}B`);
 
@@ -360,9 +588,12 @@ export async function decode4DVAsync(buffer: ArrayBuffer | Uint8Array): Promise<
   const dynamicGaussians = header.dynamicGaussians;
   const totalGaussians = header.totalGaussians;
 
-  // 3. Decompress & Decode Static Chunk (Chunk 0)
-  const staticEntry = toc.find((e) => e.chunkId === 0) || toc[0];
-  const staticFloats = await readChunkAsync(buffer, staticEntry, header);
+  // 3. Decompress & Decode Static Chunk (Chunk 0 if present)
+  const staticEntry = toc.find((e) => e.chunkId === 0);
+  const staticFloats =
+    staticEntry && staticGaussians > 0
+      ? await readChunkAsync(buffer, staticEntry, header)
+      : new Float32Array(0);
 
   // 4. Decompress & Decode Dynamic Chunks
   const dynamicEntries = toc.filter((e) => e.chunkId > 0);
@@ -370,50 +601,68 @@ export async function decode4DVAsync(buffer: ArrayBuffer | Uint8Array): Promise<
 
   if (dynamicEntries.length > 0) {
     dynamicFloats = await readChunkAsync(buffer, dynamicEntries[0], header);
+  } else if (toc.length > 0) {
+    dynamicFloats = await readChunkAsync(buffer, toc[0], header);
   } else {
     dynamicFloats = new Float32Array(dynamicGaussians * 19);
   }
 
   // 5. Build Unified Interleaved GPU Array
   const allGaussiansPacked = new Float32Array(totalGaussians * 19);
-  for (let i = 0; i < staticGaussians; i++) {
-    const src = i * 10;
-    const dst = i * 19;
-    allGaussiansPacked[dst + 0] = staticFloats[src + 0];
-    allGaussiansPacked[dst + 1] = staticFloats[src + 1];
-    allGaussiansPacked[dst + 2] = staticFloats[src + 2];
-    allGaussiansPacked[dst + 3] = staticFloats[src + 3];
-    allGaussiansPacked[dst + 4] = staticFloats[src + 4];
-    allGaussiansPacked[dst + 5] = staticFloats[src + 5];
-    allGaussiansPacked[dst + 6] = staticFloats[src + 6];
-    allGaussiansPacked[dst + 7] = staticFloats[src + 7];
-    allGaussiansPacked[dst + 8] = staticFloats[src + 8];
-    allGaussiansPacked[dst + 9] = staticFloats[src + 9];
+  if (staticGaussians > 0 && staticFloats.length >= staticGaussians * 10) {
+    for (let i = 0; i < staticGaussians; i++) {
+      const src = i * 10;
+      const dst = i * 19;
+      allGaussiansPacked[dst + 0] = staticFloats[src + 0];
+      allGaussiansPacked[dst + 1] = staticFloats[src + 1];
+      allGaussiansPacked[dst + 2] = staticFloats[src + 2];
+      allGaussiansPacked[dst + 3] = staticFloats[src + 3];
+      allGaussiansPacked[dst + 4] = staticFloats[src + 4];
+      allGaussiansPacked[dst + 5] = staticFloats[src + 5];
+      allGaussiansPacked[dst + 6] = staticFloats[src + 6];
+      allGaussiansPacked[dst + 7] = staticFloats[src + 7];
+      allGaussiansPacked[dst + 8] = staticFloats[src + 8];
+      allGaussiansPacked[dst + 9] = staticFloats[src + 9];
+    }
   }
 
-  const dynamicDstStart = staticGaussians * 19;
-  const copyCount = Math.min(dynamicFloats.length, dynamicGaussians * 19);
-  allGaussiansPacked.set(dynamicFloats.subarray(0, copyCount), dynamicDstStart);
+  const dynamicDstStart = staticGaussians > 0 ? staticGaussians * 19 : 0;
+  const copyCount = Math.min(dynamicFloats.length, allGaussiansPacked.length - dynamicDstStart);
+  if (copyCount > 0) {
+    allGaussiansPacked.set(dynamicFloats.subarray(0, copyCount), dynamicDstStart);
+  }
 
-  // 6. Parse JSON Metadata
-  const lastChunk = toc[toc.length - 1];
-  const metaStart = lastChunk.fileOffset + lastChunk.byteLength;
+  // 6. Metadata
   let metadata: Decoded4DScene['metadata'] = {
     title: '4DV Scene',
     description: '',
     creationDate: '',
   };
 
-  const dataView = new DataView(arrayBuffer, byteOffset, totalByteLength);
-  if (metaStart + 4 <= totalByteLength) {
-    const metaLen = dataView.getUint32(metaStart, true);
-    if (metaStart + 4 + metaLen <= totalByteLength) {
-      const metaBytes = new Uint8Array(arrayBuffer, byteOffset + metaStart + 4, metaLen);
-      try {
-        const jsonStr = new TextDecoder().decode(metaBytes);
-        metadata = { ...metadata, ...JSON.parse(jsonStr) };
-      } catch (e) {
-        console.warn('[4DV] Failed to parse JSON metadata block:', e);
+  if (isJsonHeaderVariant(dataView)) {
+    const { json } = parseJsonHeaderVariant(buffer);
+    metadata = {
+      title: json.title || json.name || '4DV Dynamic Scene',
+      description: json.description || 'Decoded from JSON-header .4DV container',
+      creationDate: json.creation_date || new Date().toISOString(),
+      generator: json.generator || 'Python fourdv_encode.py',
+      fps: header.fps,
+      duration: header.duration,
+      frameCount: header.frameCount,
+    };
+  } else {
+    const lastChunk = toc[toc.length - 1];
+    const metaStart = lastChunk.fileOffset + lastChunk.byteLength;
+    if (metaStart + 4 <= totalByteLength) {
+      const metaLen = dataView.getUint32(metaStart, true);
+      if (metaStart + 4 + metaLen <= totalByteLength) {
+        const metaBytes = new Uint8Array(arrayBuffer, byteOffset + metaStart + 4, metaLen);
+        try {
+          const jsonStr = new TextDecoder().decode(metaBytes);
+          metadata = { ...metadata, ...JSON.parse(jsonStr) };
+        } catch (e) {
+          console.warn('[4DV] Failed to parse JSON metadata block:', e);
+        }
       }
     }
   }
