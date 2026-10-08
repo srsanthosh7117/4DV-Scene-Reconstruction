@@ -13,7 +13,7 @@ A high-performance, lightweight browser player for dynamic 4D scenes (`3D Scene 
                        ┌─────────────────┐
                        │   4DV Decoder   │ (Web Worker)
                        └────────┬────────┘
-                                │ Typed Buffers
+                                │ Typed Buffers (Float32Array)
                                 ▼
                       4D Gaussian Scene Model
                     (Static + Polynomial Motion)
@@ -36,9 +36,9 @@ A high-performance, lightweight browser player for dynamic 4D scenes (`3D Scene 
 
 ## 🚀 Key Innovations & Principles
 
-1. **Lightweight & Broad Compatibility**: Built on **WebGL2** with instanced arrays so it runs smoothly on laptops with integrated GPUs without requiring discrete GPUs or WebGPU support.
-2. **GPU-Side Motion Evaluation**: Position trajectories $P(t) = P_0 + P_1 t + P_2 t^2 + P_3 t^3$ are evaluated directly inside the vertex shader, avoiding CPU-GPU bandwidth bottlenecks each frame.
-3. **Decoupled Architecture**: UI is managed cleanly in React, while rendering is executed directly via typed arrays in WebGL2.
+1. **Lightweight & Broad Compatibility**: Built on **WebGL2** with hardware instanced arrays (`gl.drawArraysInstanced`) so it runs smoothly on laptops with integrated GPUs without requiring discrete GPUs or WebGPU support.
+2. **True Gaussian Kernel Blending**: Fragment shader evaluates the exact radial decay $G(r) = \exp(-0.5 \cdot r^2)$ with $2\sigma$ envelope clipping, delivering soft, smooth splats.
+3. **Decoupled Architecture**: UI is managed cleanly in React, while rendering is executed directly via typed arrays in WebGL2 without creating individual React elements per Gaussian.
 4. **Deterministic Held-Out Evaluation**: Built-in camera matrix renderer for validation against ground-truth camera viewpoints.
 
 ---
@@ -49,15 +49,19 @@ A high-performance, lightweight browser player for dynamic 4D scenes (`3D Scene 
 4dv-player/
 │
 ├── src/
-│   ├── app/           # React UI shell, playback HUD, stats panel
-│   ├── renderer/      # WebGL2 shader pipelines, VAOs, instanced Gaussian rasterizer
-│   ├── camera/        # 6-DoF free flight / orbital camera controller
-│   ├── format/        # .4DV binary parser, header schemas, decompression
-│   ├── timeline/      # Sub-millisecond scrub & playback rate controller
-│   ├── workers/       # Off-thread binary decoding web worker
-│   ├── demo/          # Procedural 4D dynamic Gaussian test scenes
-│   ├── evaluation/    # Held-out matrix pose evaluator & deterministic renderer
-│   └── utils/         # Fast vector/quaternion/matrix arithmetic
+│   ├── app/           # React UI shell, diagnostics HUD, status overlay
+│   ├── renderer/      # WebGL2 engine, shader managers, instanced Gaussian rasterizer
+│   │   ├── shaders/   # GLSL 300 es vertex & fragment Gaussian shaders
+│   │   ├── GaussianRenderer.ts # VAO & instanced VBO manager
+│   │   ├── ShaderManager.ts    # Program linker & uniform cache
+│   │   └── WebGLRenderer.ts    # WebGL2 context & render loop
+│   ├── camera/        # 6-DoF free flight / orbital camera controller (Phase 3)
+│   ├── format/        # .4DV binary parser & decoder (Phase 5-7)
+│   ├── timeline/      # Sub-millisecond scrub & playback rate controller (Phase 7)
+│   ├── workers/       # Off-thread binary decoding web worker (Phase 12)
+│   ├── demo/          # Procedural 3D/4D test scene generator
+│   ├── evaluation/    # Held-out matrix pose evaluator (Phase 8/10)
+│   └── utils/         # Fast vector/matrix arithmetic (Mat4Utils)
 │
 ├── docs/              # Architectural diagrams & specifications
 ├── THIRD_PARTY.md     # Third-party attributions & isolation boundaries
