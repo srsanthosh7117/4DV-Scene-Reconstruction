@@ -206,7 +206,9 @@ export class GaussianRenderer {
     projection: Mat4,
     view: Mat4,
     model: Mat4,
-    time: number = 0
+    time: number = 0,
+    splatScale: number = 1.0,
+    renderMode: number = 0
   ) {
     if (this.instanceCount === 0 || !this.vao) return;
 
@@ -214,16 +216,20 @@ export class GaussianRenderer {
     const program = shaderManager.getProgram(programName);
     gl.useProgram(program);
 
-    // Bind matrix and time uniforms
+    // Bind matrix, time, scale, and mode uniforms
     const uProj = shaderManager.getUniformLocation(programName, 'u_projection');
     const uView = shaderManager.getUniformLocation(programName, 'u_view');
     const uModel = shaderManager.getUniformLocation(programName, 'u_model');
     const uTime = shaderManager.getUniformLocation(programName, 'u_time');
+    const uScale = shaderManager.getUniformLocation(programName, 'u_splatScale');
+    const uMode = shaderManager.getUniformLocation(programName, 'u_renderMode');
 
     if (uProj) gl.uniformMatrix4fv(uProj, false, projection);
     if (uView) gl.uniformMatrix4fv(uView, false, view);
     if (uModel) gl.uniformMatrix4fv(uModel, false, model);
     if (uTime) gl.uniform1f(uTime, time);
+    if (uScale) gl.uniform1f(uScale, splatScale);
+    if (uMode) gl.uniform1i(uMode, renderMode);
 
     // Configure blending & depth for transparent Gaussian splatting
     gl.enable(gl.BLEND);

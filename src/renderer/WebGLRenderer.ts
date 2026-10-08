@@ -34,6 +34,10 @@ export class WebGLRenderer {
   public isPlaying: boolean = true;      // Play/pause state
   public playbackSpeed: number = 1.0;   // Playback rate: 0.25x, 0.5x, 1x, 2x
 
+  // Shading & Visual Configuration
+  public splatScale: number = 1.0;
+  public renderMode: number = 0; // 0: RGB, 1: Motion Heatmap, 2: Depth, 3: Stream Class
+
   // Performance Tracking
   private lastTime: number = performance.now();
   private frameCount: number = 0;
@@ -147,6 +151,18 @@ export class WebGLRenderer {
     this.playbackSpeed = speed;
   }
 
+  public setSplatScale(scale: number) {
+    this.splatScale = Math.max(0.1, Math.min(3.5, scale));
+  }
+
+  public setRenderMode(mode: number) {
+    this.renderMode = mode;
+  }
+
+  public setClearColor(r: number, g: number, b: number) {
+    this.gl.clearColor(r, g, b, 1.0);
+  }
+
   /**
    * Starts the continuous WebGL2 render loop
    */
@@ -228,7 +244,9 @@ export class WebGLRenderer {
       matrices.projectionMatrix,
       matrices.viewMatrix,
       this.modelMatrix,
-      timeToRender
+      timeToRender,
+      this.splatScale,
+      this.renderMode
     );
   }
 
