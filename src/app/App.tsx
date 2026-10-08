@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { WebGLRenderer, GaussianRenderStats } from '../renderer';
+import { CameraTelemetry } from '../camera';
 import { generateProceduralGaussianScene } from '../demo';
 
 export const App: React.FC = () => {
@@ -16,16 +17,25 @@ export const App: React.FC = () => {
     viewportHeight: 0,
   });
 
-  const [autoRotate, setAutoRotate] = useState<boolean>(true);
+  const [cameraTelemetry, setCameraTelemetry] = useState<CameraTelemetry>({
+    position: [0, 1.5, 4.2],
+    yawDeg: 0,
+    pitchDeg: -5.7,
+    fovDeg: 60,
+    mode: 'FREE_FLIGHT',
+  });
+
+  const [cameraMode, setCameraMode] = useState<'FREE_FLIGHT' | 'ORBIT'>('FREE_FLIGHT');
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     try {
-      // Initialize our custom WebGL2 Renderer
-      const renderer = new WebGLRenderer(canvas, (newStats) => {
-        setStats(newStats);
+      // Initialize our custom WebGL2 Renderer with 6-DoF Camera
+      const renderer = new WebGLRenderer(canvas, {
+        onStats: (newStats) => setStats(newStats),
+        onCameraTelemetry: (telemetry) => setCameraTelemetry(telemetry),
       });
       rendererRef.current = renderer;
 
@@ -49,11 +59,16 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  const toggleAutoRotate = () => {
+  const handleModeChange = (mode: 'FREE_FLIGHT' | 'ORBIT') => {
     if (rendererRef.current) {
-      const next = !autoRotate;
-      rendererRef.current.setAutoRotate(next);
-      setAutoRotate(next);
+      rendererRef.current.cameraController.setMode(mode);
+      setCameraMode(mode);
+    }
+  };
+
+  const handleResetCamera = () => {
+    if (rendererRef.current) {
+      rendererRef.current.cameraController.reset([0, 1.5, 4.2], 0, -0.1);
     }
   };
 
@@ -90,17 +105,57 @@ export const App: React.FC = () => {
             boxShadow: webglStatus === 'READY' ? '0 0 8px #10b981' : 'none'
           }} />
           <span style={{ fontWeight: 700, fontSize: '13px', letterSpacing: '0.08em', color: '#f8fafc' }}>
-            4DV PLAYER <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 500, marginLeft: '4px' }}>PHASE 2</span>
+            4DV PLAYER <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600, marginLeft: '4px' }}>PHASE 3: 6-DoF CAMERA</span>
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '12px' }}>
+        {/* Camera Mode Toggles */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{
+            display: 'flex',
+            backgroundColor: 'rgba(0, 0, 0, 0.3)',
+            borderRadius: '6px',
+            padding: '2px',
+            border: '1px solid rgba(255, 255, 255, 0.08)'
+          }}>
+            <button
+              onClick={() => handleModeChange('FREE_FLIGHT')}
+              style={{
+                background: cameraMode === 'FREE_FLIGHT' ? '#0284c7' : 'transparent',
+                border: 'none',
+                color: cameraMode === 'FREE_FLIGHT' ? '#ffffff' : '#94a3b8',
+                padding: '4px 10px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '11px',
+                fontWeight: 600
+              }}
+            >
+              6-DoF Free Flight
+            </button>
+            <button
+              onClick={() => handleModeChange('ORBIT')}
+              style={{
+                background: cameraMode === 'ORBIT' ? '#0284c7' : 'transparent',
+                border: 'none',
+                color: cameraMode === 'ORBIT' ? '#ffffff' : '#94a3b8',
+                padding: '4px 10px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '11px',
+                fontWeight: 600
+              }}
+            >
+              Orbit Target
+            </button>
+          </div>
+
           <button
-            onClick={toggleAutoRotate}
+            onClick={handleResetCamera}
             style={{
-              background: autoRotate ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-              border: `1px solid ${autoRotate ? 'rgba(56, 189, 248, 0.4)' : 'rgba(255, 255, 255, 0.1)'}`,
-              color: autoRotate ? '#38bdf8' : '#94a3b8',
+              background: 'rgba(255, 255, 255, 0.06)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              color: '#cbd5e1',
               padding: '4px 10px',
               borderRadius: '4px',
               cursor: 'pointer',
@@ -108,15 +163,17 @@ export const App: React.FC = () => {
               fontWeight: 500
             }}
           >
-            {autoRotate ? 'Orbit: Active' : 'Orbit: Paused'}
+            Reset Camera
           </button>
+
           <div style={{
             padding: '3px 8px',
             borderRadius: '4px',
             backgroundColor: webglStatus === 'READY' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
             color: webglStatus === 'READY' ? '#34d399' : '#f87171',
             fontWeight: 600,
-            fontSize: '11px'
+            fontSize: '11px',
+            marginLeft: '4px'
           }}>
             WebGL2: {webglStatus}
           </div>
@@ -129,7 +186,8 @@ export const App: React.FC = () => {
         position: 'relative',
         width: '100%',
         height: '100%',
-        backgroundColor: '#04060a'
+        backgroundColor: '#04060a',
+        cursor: cameraMode === 'FREE_FLIGHT' ? 'crosshair' : 'grab'
       }}>
         <canvas
           ref={canvasRef}
@@ -140,27 +198,79 @@ export const App: React.FC = () => {
           }}
         />
 
-        {/* On-Screen HUD Overlay */}
+        {/* Diagnostics & Camera Telemetry Panel */}
         <div style={{
           position: 'absolute',
           top: '12px',
           left: '12px',
-          padding: '10px 14px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          pointerEvents: 'none'
+        }}>
+          {/* Scene Diagnostics */}
+          <div style={{
+            padding: '10px 14px',
+            borderRadius: '6px',
+            backgroundColor: 'rgba(15, 23, 42, 0.85)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            fontSize: '11px',
+            lineHeight: '1.6',
+            color: '#cbd5e1',
+            minWidth: '220px'
+          }}>
+            <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '2px', fontSize: '11px', letterSpacing: '0.04em' }}>
+              SCENE DIAGNOSTICS
+            </div>
+            <div>Gaussians: <span style={{ color: '#38bdf8', fontWeight: 600 }}>{stats.gaussianCount.toLocaleString()}</span></div>
+            <div>FPS: <span style={{ color: stats.fps >= 50 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>{stats.fps}</span> ({stats.frameTimeMs} ms)</div>
+            <div>Viewport: <span style={{ color: '#94a3b8' }}>{stats.viewportWidth} × {stats.viewportHeight}</span></div>
+          </div>
+
+          {/* Camera Telemetry */}
+          <div style={{
+            padding: '10px 14px',
+            borderRadius: '6px',
+            backgroundColor: 'rgba(15, 23, 42, 0.85)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            fontSize: '11px',
+            lineHeight: '1.6',
+            color: '#cbd5e1',
+            minWidth: '220px'
+          }}>
+            <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '2px', fontSize: '11px', letterSpacing: '0.04em' }}>
+              CAMERA TELEMETRY
+            </div>
+            <div>Position: <span style={{ color: '#38bdf8', fontFamily: 'monospace' }}>
+              [{cameraTelemetry.position[0].toFixed(2)}, {cameraTelemetry.position[1].toFixed(2)}, {cameraTelemetry.position[2].toFixed(2)}]
+            </span></div>
+            <div>Yaw: <span style={{ color: '#f1f5f9', fontFamily: 'monospace' }}>{cameraTelemetry.yawDeg}°</span> | Pitch: <span style={{ color: '#f1f5f9', fontFamily: 'monospace' }}>{cameraTelemetry.pitchDeg}°</span></div>
+            <div>FOV: <span style={{ color: '#f1f5f9', fontFamily: 'monospace' }}>{cameraTelemetry.fovDeg}°</span></div>
+            <div>Mode: <span style={{ color: '#a78bfa', fontWeight: 600 }}>{cameraTelemetry.mode}</span></div>
+          </div>
+        </div>
+
+        {/* Controls Legend Overlay */}
+        <div style={{
+          position: 'absolute',
+          bottom: '12px',
+          left: '12px',
+          padding: '8px 12px',
           borderRadius: '6px',
           backgroundColor: 'rgba(15, 23, 42, 0.75)',
           backdropFilter: 'blur(6px)',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          fontSize: '12px',
-          lineHeight: '1.6',
-          color: '#cbd5e1',
-          pointerEvents: 'none'
+          border: '1px solid rgba(255, 255, 255, 0.06)',
+          fontSize: '11px',
+          color: '#94a3b8',
+          pointerEvents: 'none',
+          lineHeight: '1.5'
         }}>
-          <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '2px', fontSize: '11px', letterSpacing: '0.04em' }}>
-            SCENE DIAGNOSTICS
-          </div>
-          <div>Gaussians: <span style={{ color: '#38bdf8', fontWeight: 600 }}>{stats.gaussianCount.toLocaleString()}</span></div>
-          <div>FPS: <span style={{ color: stats.fps >= 50 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>{stats.fps}</span> ({stats.frameTimeMs} ms)</div>
-          <div>Viewport: <span style={{ color: '#94a3b8' }}>{stats.viewportWidth} × {stats.viewportHeight}</span></div>
+          <div style={{ color: '#e2e8f0', fontWeight: 600, marginBottom: '2px' }}>Navigation Controls</div>
+          <div><kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>W A S D</kbd> Move Horizontal</div>
+          <div><kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Q / E</kbd> Down / Up &nbsp;|&nbsp; <kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Shift</kbd> Sprint</div>
+          <div><kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Mouse Drag</kbd> Look &nbsp;|&nbsp; <kbd style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '3px', color: '#f8fafc' }}>Wheel</kbd> Zoom</div>
         </div>
 
         {/* Error Fallback Banner */}
@@ -196,9 +306,9 @@ export const App: React.FC = () => {
         fontSize: '11px',
         color: '#64748b'
       }}>
-        <div>Renderer: Custom WebGL2 Instanced Splatting</div>
-        <div>Mode: Phase 2 Procedural 3D Verification</div>
-        <div>Pipeline: GPU Instanced Quads + Radial Exponential Decay</div>
+        <div>Camera: 6-DoF Full Flight Active</div>
+        <div>Scene: Procedural 3D Spatial Test</div>
+        <div>Coordinate Frame: Right-Handed (OpenGL -Z forward)</div>
       </footer>
     </div>
   );

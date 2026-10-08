@@ -3,7 +3,13 @@ import { GaussianRenderer } from './GaussianRenderer';
 import { GAUSSIAN_VERTEX_SHADER } from './shaders/gaussian.vert';
 import { GAUSSIAN_FRAGMENT_SHADER } from './shaders/gaussian.frag';
 import { Gaussian3D, GaussianRenderStats } from './types';
-import { Mat4, Mat4Utils, Vec3 } from '../utils/math';
+import { Mat4, Mat4Utils } from '../utils/math';
+import { Camera, CameraController, CameraTelemetry } from '../camera';
+
+export interface RendererCallbacks {
+  onStats?: (stats: GaussianRenderStats) => void;
+  onCameraTelemetry?: (telemetry: CameraTelemetry) => void;
+}
 
 export class WebGLRenderer {
   private canvas: HTMLCanvasElement;
@@ -11,34 +17,26 @@ export class WebGLRenderer {
   private shaderManager: ShaderManager;
   private gaussianRenderer: GaussianRenderer;
 
+  // 6-DoF Camera System
+  public camera: Camera;
+  public cameraController: CameraController;
+
   private isRunning: boolean = false;
   private animationFrameId: number | null = null;
 
   // Matrices
-  private projectionMatrix: Mat4 = Mat4Utils.createIdentity();
-  private viewMatrix: Mat4 = Mat4Utils.createIdentity();
   private modelMatrix: Mat4 = Mat4Utils.createIdentity();
-
-  // Camera Settings
-  private eyePosition: Vec3 = [0, 1.5, 4.0];
-  private targetPosition: Vec3 = [0, 0, 0];
-  private upVector: Vec3 = [0, 1, 0];
-  private fovDegrees: number = 60;
 
   // Performance Tracking
   private lastTime: number = performance.now();
   private frameCount: number = 0;
   private fps: number = 0;
   private frameTimeMs: number = 0;
-  private onStatsCallback?: (stats: GaussianRenderStats) => void;
+  private callbacks: RendererCallbacks;
 
-  // Orbit angle for Phase 2 test visualization
-  private autoRotate: boolean = true;
-  private orbitAngle: number = 0;
-
-  constructor(canvas: HTMLCanvasElement, onStats?: (stats: GaussianRenderStats) => void) {
+  constructor(canvas: HTMLCanvasElement, callbacks?: RendererCallbacks) {
     this.canvas = canvas;
-    this.onStatsCallback = onStats;
+    this.callbacks = callbacks || {};
 
     const gl = canvas.getContext('webgl2', {
       alpha: false,
@@ -62,8 +60,21 @@ export class WebGLRenderer {
     // Initialize Gaussian instanced renderer
     this.gaussianRenderer = new GaussianRenderer(gl);
 
-    // Set clear color
-    gl.clearColor(0.04, 0.05, 0.08, 1.0); // Deep cinematic dark background
+    // Initialize Camera & Controller
+    this.camera = new Camera({
+      position: [0, 1.5, 4.2],
+      yaw: 0,
+      pitch: -0.1,
+      fov: 60,
+    });
+    this.cameraController = new CameraController(this.camera, canvas, {
+      moveSpeed: 3.5,
+      sprintMultiplier: 2.5,
+      lookSensitivity: 0.003,
+    });
+
+    // Deep cinematic dark background
+    gl.clearColor(0.04, 0.05, 0.08, 1.0);
 
     this.handleResize();
   }
@@ -72,7 +83,7 @@ export class WebGLRenderer {
    * Resizes drawing buffer to match display resolution and high-DPI
    */
   public handleResize(): boolean {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2); // Cap at 2x for performance on high-DPI screens
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const displayWidth = Math.floor(this.canvas.clientWidth * dpr);
     const displayHeight = Math.floor(this.canvas.clientHeight * dpr);
 
@@ -81,10 +92,8 @@ export class WebGLRenderer {
       this.canvas.height = displayHeight;
       this.gl.viewport(0, 0, displayWidth, displayHeight);
 
-      // Update projection matrix
       const aspect = displayWidth / Math.max(displayHeight, 1);
-      const fovRad = (this.fovDegrees * Math.PI) / 180;
-      Mat4Utils.perspective(this.projectionMatrix, fovRad, aspect, 0.1, 100.0);
+      this.camera.setAspect(aspect);
       return true;
     }
     return false;
@@ -95,10 +104,6 @@ export class WebGLRenderer {
    */
   public setGaussians(gaussians: Gaussian3D[]) {
     this.gaussianRenderer.uploadGaussians(gaussians);
-  }
-
-  public setAutoRotate(enabled: boolean) {
-    this.autoRotate = enabled;
   }
 
   /**
@@ -116,13 +121,18 @@ export class WebGLRenderer {
       this.frameTimeMs = deltaMs;
       this.lastTime = currentTime;
 
-      // FPS tracking (every 30 frames)
+      const deltaSec = Math.min(deltaMs / 1000, 0.1); // Guard against giant delta jumps
+
+      // Update 6-DoF Camera Controller with input & delta-time
+      this.cameraController.update(deltaSec);
+
+      // FPS and Telemetry updates
       this.frameCount++;
-      if (this.frameCount >= 30) {
+      if (this.frameCount >= 15) {
         this.fps = Math.round(1000 / Math.max(deltaMs, 0.001));
         this.frameCount = 0;
-        if (this.onStatsCallback) {
-          this.onStatsCallback({
+        if (this.callbacks.onStats) {
+          this.callbacks.onStats({
             fps: this.fps,
             frameTimeMs: parseFloat(this.frameTimeMs.toFixed(2)),
             gaussianCount: this.gaussianRenderer.getGaussianCount(),
@@ -130,10 +140,13 @@ export class WebGLRenderer {
             viewportHeight: this.canvas.height,
           });
         }
+        if (this.callbacks.onCameraTelemetry) {
+          this.callbacks.onCameraTelemetry(this.cameraController.getTelemetry());
+        }
       }
 
       this.handleResize();
-      this.renderFrame(deltaMs);
+      this.renderFrame();
 
       this.animationFrameId = requestAnimationFrame(loop);
     };
@@ -144,20 +157,11 @@ export class WebGLRenderer {
   /**
    * Single frame render execution
    */
-  public renderFrame(deltaMs: number = 16.6) {
+  public renderFrame() {
     const gl = this.gl;
 
-    // Optional gentle test orbit for Phase 2 demo inspection
-    if (this.autoRotate) {
-      this.orbitAngle += (deltaMs / 1000) * 0.4;
-      const radius = 4.2;
-      this.eyePosition[0] = Math.sin(this.orbitAngle) * radius;
-      this.eyePosition[1] = 1.6 + Math.sin(this.orbitAngle * 0.5) * 0.4;
-      this.eyePosition[2] = Math.cos(this.orbitAngle) * radius;
-    }
-
-    // Compute View Matrix
-    Mat4Utils.lookAt(this.viewMatrix, this.eyePosition, this.targetPosition, this.upVector);
+    // Get current View and Projection matrices from 6-DoF Camera
+    const matrices = this.camera.updateMatrices();
 
     // Clear color & depth buffers
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -166,8 +170,8 @@ export class WebGLRenderer {
     this.gaussianRenderer.render(
       this.shaderManager,
       'gaussian',
-      this.projectionMatrix,
-      this.viewMatrix,
+      matrices.projectionMatrix,
+      matrices.viewMatrix,
       this.modelMatrix
     );
   }
@@ -184,10 +188,11 @@ export class WebGLRenderer {
   }
 
   /**
-   * Cleans up GPU resources
+   * Cleans up GPU resources & event listeners
    */
   public dispose() {
     this.stop();
+    this.cameraController.dispose();
     this.gaussianRenderer.dispose();
     this.shaderManager.dispose();
   }

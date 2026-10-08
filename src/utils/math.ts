@@ -6,6 +6,80 @@
 export type Mat4 = Float32Array;
 export type Vec3 = [number, number, number];
 
+export class Vec3Utils {
+  static create(x = 0, y = 0, z = 0): Vec3 {
+    return [x, y, z];
+  }
+
+  static clone(a: Vec3): Vec3 {
+    return [a[0], a[1], a[2]];
+  }
+
+  static set(out: Vec3, x: number, y: number, z: number): Vec3 {
+    out[0] = x;
+    out[1] = y;
+    out[2] = z;
+    return out;
+  }
+
+  static add(out: Vec3, a: Vec3, b: Vec3): Vec3 {
+    out[0] = a[0] + b[0];
+    out[1] = a[1] + b[1];
+    out[2] = a[2] + b[2];
+    return out;
+  }
+
+  static subtract(out: Vec3, a: Vec3, b: Vec3): Vec3 {
+    out[0] = a[0] - b[0];
+    out[1] = a[1] - b[1];
+    out[2] = a[2] - b[2];
+    return out;
+  }
+
+  static scale(out: Vec3, a: Vec3, s: number): Vec3 {
+    out[0] = a[0] * s;
+    out[1] = a[1] * s;
+    out[2] = a[2] * s;
+    return out;
+  }
+
+  static scaleAndAdd(out: Vec3, a: Vec3, b: Vec3, scale: number): Vec3 {
+    out[0] = a[0] + b[0] * scale;
+    out[1] = a[1] + b[1] * scale;
+    out[2] = a[2] + b[2] * scale;
+    return out;
+  }
+
+  static normalize(out: Vec3, a: Vec3): Vec3 {
+    const x = a[0], y = a[1], z = a[2];
+    let len = x * x + y * y + z * z;
+    if (len > 0) {
+      len = 1 / Math.sqrt(len);
+      out[0] = x * len;
+      out[1] = y * len;
+      out[2] = z * len;
+    }
+    return out;
+  }
+
+  static cross(out: Vec3, a: Vec3, b: Vec3): Vec3 {
+    const ax = a[0], ay = a[1], az = a[2];
+    const bx = b[0], by = b[1], bz = b[2];
+    out[0] = ay * bz - az * by;
+    out[1] = az * bx - ax * bz;
+    out[2] = ax * by - ay * bx;
+    return out;
+  }
+
+  static dot(a: Vec3, b: Vec3): number {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  }
+
+  static length(a: Vec3): number {
+    return Math.hypot(a[0], a[1], a[2]);
+  }
+}
+
 export class Mat4Utils {
   /** Creates an identity 4x4 matrix */
   static createIdentity(): Mat4 {
@@ -76,6 +150,7 @@ export class Mat4Utils {
     let z2 = eyez - centerz;
 
     let len = 1 / Math.hypot(z0, z1, z2);
+    if (!isFinite(len) || isNaN(len)) len = 1;
     z0 *= len; z1 *= len; z2 *= len;
 
     let x0 = upy * z2 - upz * z1;

@@ -24,3 +24,17 @@
 - Built `WebGLRenderer` managing WebGL2 canvas context, high-DPI resize tracking (`devicePixelRatio`), RAF render loop, and FPS diagnostic instrumentation.
 - Created procedural 3D Gaussian test scene generator (`generateProceduralGaussianScene`) rendering 600 structured 3D Gaussians across a core cluster and torus spiral.
 - Verified WebGL2 rendering and zero React DOM overhead during 60 FPS animation.
+
+### Hour 1:15 – Hour 2:00: Full 6-DoF Camera System & Spatial Navigation (Phase 3)
+- Built `Camera` class managing position $[x, y, z]$, yaw, pitch, roll, FOV, near/far clipping planes, and right-handed OpenGL coordinate frames.
+- Implemented trigonometrical forward, right, and up vector generation and dynamic view-projection ($VP = P \times V$) updates.
+- Built `CameraController` handling real-time inputs:
+  - `W` / `A` / `S` / `D` for horizontal camera translation.
+  - `Q` / `E` for vertical elevation translation.
+  - `Shift` key for sprint velocity boosting ($\times 2.5$).
+  - Mouse drag / Pointer events for continuous Yaw & Pitch flight orientation.
+  - Mouse scroll wheel for dynamic FOV zooming and orbit dollying.
+  - Switchable modes: 6-DoF Free Flight mode & Orbit Target mode.
+- Integrated camera view matrices directly into `WebGLRenderer` per-frame pipeline.
+- Implemented live Camera Telemetry HUD in `App.tsx` displaying real-time coordinate position, Euler yaw/pitch angles, and FOV.
+- Verified smooth 60 FPS flight navigation through 3D Gaussian volume.
