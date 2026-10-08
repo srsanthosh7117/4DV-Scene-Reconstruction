@@ -2,7 +2,14 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { WebGLRenderer, GaussianRenderStats } from '../renderer';
 import { CameraTelemetry } from '../camera';
 import { generateTemporalGaussianScene } from '../demo';
-import { separateStaticDynamicGaussians, SeparationStats, runTemporalCompressionTest, CompressionBenchmarkResult } from '../format';
+import {
+  separateStaticDynamicGaussians,
+  SeparationStats,
+  runTemporalCompressionTest,
+  CompressionBenchmarkResult,
+  quantizeAndOrderGaussians,
+  QuantizationReport,
+} from '../format';
 
 export const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -41,6 +48,9 @@ export const App: React.FC = () => {
   const [separationMode, setSeparationMode] = useState<'ALL' | 'STATIC_ONLY' | 'DYNAMIC_ONLY'>('ALL');
   const [separationStats, setSeparationStats] = useState<SeparationStats | null>(null);
 
+  // Quantization & Spatial Ordering Report
+  const [quantReport, setQuantReport] = useState<QuantizationReport | null>(null);
+
   // Compression Benchmark State
   const [benchmarkResult, setBenchmarkResult] = useState<CompressionBenchmarkResult | null>(null);
   const [showBenchmarkModal, setShowBenchmarkModal] = useState<boolean>(false);
@@ -55,9 +65,12 @@ export const App: React.FC = () => {
     return separateStaticDynamicGaussians(generatedData.polynomials, 0.0001);
   }, [generatedData]);
 
+  // Compute Quantization & Morton Spatial Ordering
   useEffect(() => {
     setSeparationStats(separatedData.stats);
-  }, [separatedData]);
+    const { report } = quantizeAndOrderGaussians(generatedData.polynomials, 0.05, 0.005);
+    setQuantReport(report);
+  }, [generatedData, separatedData]);
 
   // Handle active Gaussian dataset changes (ALL, STATIC_ONLY, DYNAMIC_ONLY)
   useEffect(() => {
@@ -196,7 +209,7 @@ export const App: React.FC = () => {
             boxShadow: webglStatus === 'READY' ? '0 0 8px #10b981' : 'none'
           }} />
           <span style={{ fontWeight: 700, fontSize: '13px', letterSpacing: '0.08em', color: '#f8fafc' }}>
-            4DV PLAYER <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600, marginLeft: '4px' }}>PHASE 6: TEMPORAL COMPRESSION</span>
+            4DV PLAYER <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600, marginLeft: '4px' }}>PHASE 7: QUANTIZATION & ORDERING</span>
           </span>
         </div>
 
@@ -271,7 +284,7 @@ export const App: React.FC = () => {
               fontWeight: 600
             }}
           >
-            Run Delta Accuracy Test
+            Run Compression Suite
           </button>
 
           {/* Camera Flight vs Orbit Mode */}
@@ -360,7 +373,7 @@ export const App: React.FC = () => {
           gap: '8px',
           pointerEvents: 'none'
         }}>
-          {/* Scene Diagnostics */}
+          {/* Scene Diagnostics & Compression */}
           <div style={{
             padding: '10px 14px',
             borderRadius: '6px',
@@ -370,15 +383,15 @@ export const App: React.FC = () => {
             fontSize: '11px',
             lineHeight: '1.6',
             color: '#cbd5e1',
-            minWidth: '240px'
+            minWidth: '250px'
           }}>
             <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '2px', fontSize: '11px', letterSpacing: '0.04em' }}>
-              4D COMPRESSION DIAGNOSTICS
+              4D COMPRESSION & QUANTIZATION
             </div>
-            <div>Active Primitives: <span style={{ color: '#38bdf8', fontWeight: 600 }}>{stats.gaussianCount.toLocaleString()}</span></div>
-            <div>Static: <span style={{ color: '#94a3b8' }}>{separationStats?.staticCount} ({((separationStats?.staticRatio || 0) * 100).toFixed(0)}%)</span></div>
-            <div>Dynamic: <span style={{ color: '#a78bfa' }}>{separationStats?.dynamicCount} ({((separationStats?.dynamicRatio || 0) * 100).toFixed(0)}%)</span></div>
-            <div>Bandwidth Saved: <span style={{ color: '#34d399', fontWeight: 600 }}>{separationStats?.bandwidthSavedPercent}%</span></div>
+            <div>Raw Size (Float32): <span style={{ color: '#94a3b8' }}>{((quantReport?.rawFloat32Bytes || 0) / 1024).toFixed(1)} KB</span></div>
+            <div>Quantized Footprint: <span style={{ color: '#38bdf8', fontWeight: 600 }}>{((quantReport?.quantizedBytes || 0) / 1024).toFixed(1)} KB</span></div>
+            <div>Compression Ratio: <span style={{ color: '#34d399', fontWeight: 600 }}>{quantReport?.compressionRatio}x ({quantReport?.spaceSavingsPercent}% saved)</span></div>
+            <div>Spatial Order: <span style={{ color: '#a78bfa' }}>3D Morton Z-Curve</span></div>
             <div>FPS: <span style={{ color: stats.fps >= 50 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>{stats.fps}</span> ({stats.frameTimeMs} ms)</div>
           </div>
 
@@ -392,7 +405,7 @@ export const App: React.FC = () => {
             fontSize: '11px',
             lineHeight: '1.6',
             color: '#cbd5e1',
-            minWidth: '240px'
+            minWidth: '250px'
           }}>
             <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '2px', fontSize: '11px', letterSpacing: '0.04em' }}>
               CAMERA TELEMETRY
@@ -425,7 +438,7 @@ export const App: React.FC = () => {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#38bdf8' }}>
-                Numerical Delta Accuracy Verification
+                Numerical Delta Accuracy & Quantization Report
               </h3>
               <button
                 onClick={() => setShowBenchmarkModal(false)}
@@ -445,6 +458,8 @@ export const App: React.FC = () => {
               <div>Dataset: <b>{benchmarkResult.gaussianCount.toLocaleString()} Gaussians</b></div>
               <div>Frames: <b>{benchmarkResult.frameCount} frames @ {benchmarkResult.fps} FPS</b></div>
               <div>Tested Sub-frame Samples: <b>{benchmarkResult.metrics.testedSamples.toLocaleString()}</b></div>
+              <div>Quantization: <b>16-bit Pos, 8-bit Color, 8-bit Alpha</b></div>
+              <div>Spatial Sorting: <b>Morton (Z-Curve) Interleaved Keys</b></div>
               <div>Max Position Error: <span style={{ color: '#34d399', fontWeight: 600 }}>{benchmarkResult.metrics.maxPositionError} units</span></div>
               <div>Mean Position Error (MAE): <span style={{ color: '#34d399', fontWeight: 600 }}>{benchmarkResult.metrics.meanPositionError} units</span></div>
               <div style={{ marginTop: '8px', padding: '6px 10px', borderRadius: '4px', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#34d399', fontWeight: 600 }}>
@@ -591,9 +606,9 @@ export const App: React.FC = () => {
         fontSize: '10px',
         color: '#64748b'
       }}>
-        <div>Compression: Persistent Base + Sparse Temporal Keyframe Deltas</div>
-        <div>Bandwidth Savings: {separationStats?.bandwidthSavedPercent}%</div>
-        <div>Numerical Accuracy: Sub-millimeter Exact Reconstruction Verified</div>
+        <div>Quantization: 16-bit Pos / 8-bit Color & Alpha | 3D Morton Order</div>
+        <div>Compression Ratio: {quantReport?.compressionRatio}x ({quantReport?.spaceSavingsPercent}% saved)</div>
+        <div>6-DoF Flight Active</div>
       </footer>
     </div>
   );
