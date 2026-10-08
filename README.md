@@ -15,8 +15,12 @@ A high-performance, lightweight browser player for dynamic 4D scenes (`3D Scene 
                        └────────┬────────┘
                                 │ Typed Buffers (Float32Array)
                                 ▼
-                      4D Gaussian Scene Model
-                    (Static + Polynomial Motion)
+                 ┌─────────────────────────────┐
+                 │ Static / Dynamic Separator  │
+                 ├──────────────┬──────────────┤
+                 │ Static (30%) │ Dynamic(70%) │
+                 │ (10 floats)  │ (19 floats)  │
+                 └──────────────┴──────────────┘
                                 │
                  ┌──────────────┴──────────────┐
                  ▼                             ▼
@@ -37,10 +41,11 @@ A high-performance, lightweight browser player for dynamic 4D scenes (`3D Scene 
 ## 🚀 Key Innovations & Principles
 
 1. **Lightweight & Broad Compatibility**: Built on **WebGL2** with hardware instanced arrays (`gl.drawArraysInstanced`) so it runs smoothly on laptops with integrated GPUs without requiring discrete GPUs or WebGPU support.
-2. **GPU-Side 4D Trajectory Evaluation**: Polynomial motion coefficients $\mathbf{P}(t) = \mathbf{P}_0 + \mathbf{P}_1 t + \mathbf{P}_2 t^2 + \mathbf{A} \sin(\omega t + \phi)$ are evaluated directly inside the vertex shader, avoiding per-frame CPU-GPU bandwidth bottlenecks.
-3. **True 6-DoF Free Navigation**: Full 6-Degrees-of-Freedom first-person flight controls (`W`/`A`/`S`/`D`/`Q`/`E`/`Shift` + Mouse look) with real-time Euler rotation and dynamic LookAt view matrix generation.
-4. **Interactive 4D Timeline**: Live time scrubber, variable playback speeds (0.25x–2x), discrete time jump testing, and sub-millisecond seeking.
-5. **Decoupled Architecture**: UI is managed cleanly in React, while rendering is executed directly via typed arrays in WebGL2 without creating individual React elements per Gaussian.
+2. **Static / Dynamic Factorization**: Classifies and separates static background landmarks (30%) from dynamic foreground motion (70%), dramatically reducing memory bandwidth and compression payload size.
+3. **GPU-Side 4D Trajectory Evaluation**: Polynomial motion coefficients $\mathbf{P}(t) = \mathbf{P}_0 + \mathbf{P}_1 t + \mathbf{P}_2 t^2 + \mathbf{A} \sin(\omega t + \phi)$ are evaluated directly inside the vertex shader, avoiding per-frame CPU-GPU bandwidth bottlenecks.
+4. **True 6-DoF Free Navigation**: Full 6-Degrees-of-Freedom first-person flight controls (`W`/`A`/`S`/`D`/`Q`/`E`/`Shift` + Mouse look) with real-time Euler rotation and dynamic LookAt view matrix generation.
+5. **Interactive 4D Timeline**: Live time scrubber, variable playback speeds (0.25x–2x), discrete time jump testing, and sub-millisecond seeking.
+6. **Decoupled Architecture**: UI is managed cleanly in React, while rendering is executed directly via typed arrays in WebGL2 without creating individual React elements per Gaussian.
 
 ---
 
@@ -52,6 +57,7 @@ A high-performance, lightweight browser player for dynamic 4D scenes (`3D Scene 
 * **`Shift`**: Sprint movement (2.5x speed)
 * **`Mouse Drag`**: Look direction (Yaw / Pitch)
 * **`Mouse Wheel`**: Adjust Field of View (FOV) / Orbit Dolly
+* **`Separation Filters`**: View `All (1,200)`, `Static (360)`, or `Dynamic (840)`
 * **`Timeline Slider`**: Scrub through time $t \in [0, 5\text{s}]$
 * **`Speed Selector`**: Adjust playback rate (0.25x, 0.5x, 1x, 2x)
 * **`Test Points`**: Jump to normalized timestamps $t = 0.0, 0.25, 0.50, 0.75, 1.0$

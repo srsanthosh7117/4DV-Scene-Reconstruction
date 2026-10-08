@@ -47,3 +47,10 @@
 - Built procedural 4D temporal scene generator (`generateTemporalGaussianScene`) with 1,200 Gaussians (360 static reference landmarks + 840 dynamic oscillating/pulsing 4D Gaussians).
 - Added timeline scrubber bar, play/pause controls, variable playback speed (`0.25x`, `0.5x`, `1x`, `2x`), and discrete test point verification buttons ($t = 0.0, 0.25, 0.50, 0.75, 1.0$).
 - Verified 60 FPS rendering and smooth GPU-evaluated deformation over time while moving the 6-DoF camera freely.
+
+### Hour 2:45 – Hour 3:30: Static / Dynamic Gaussian Separation & Motion Classification (Phase 5)
+- Implemented kinematic motion energy metric $E = \|\mathbf{P}_1\|^2 + 2\|\mathbf{P}_2\|^2 + A^2$ in `src/format/separation.ts`.
+- Separated scene primitives into **STATIC** ($E \le \epsilon$) and **DYNAMIC** ($E > \epsilon$) streams.
+- Achieved **14.21% raw memory bandwidth reduction** by eliminating unnecessary temporal trajectories for static landmark Gaussians ($40\text{B}$ vs $76\text{B}$).
+- Added interactive filter toggles (`ALL`, `STATIC ONLY`, `DYNAMIC ONLY`) in the UI HUD to visualize and inspect motion boundaries live.
+- Tested and verified real-time stream switching and 0 rendering artifacts.

@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { WebGLRenderer, GaussianRenderStats } from '../renderer';
 import { CameraTelemetry } from '../camera';
 import { generateTemporalGaussianScene } from '../demo';
+import { separateStaticDynamicGaussians, SeparationStats } from '../format';
 
 export const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -36,12 +37,43 @@ export const App: React.FC = () => {
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [cameraMode, setCameraMode] = useState<'FREE_FLIGHT' | 'ORBIT'>('FREE_FLIGHT');
 
+  // Static / Dynamic Separation Filter
+  const [separationMode, setSeparationMode] = useState<'ALL' | 'STATIC_ONLY' | 'DYNAMIC_ONLY'>('ALL');
+  const [separationStats, setSeparationStats] = useState<SeparationStats | null>(null);
+
+  // Raw generated dataset
+  const generatedData = useMemo(() => {
+    return generateTemporalGaussianScene(1200, 5.0, 30);
+  }, []);
+
+  // Compute separation on dataset
+  const separatedData = useMemo(() => {
+    return separateStaticDynamicGaussians(generatedData.polynomials, 0.0001);
+  }, [generatedData]);
+
+  useEffect(() => {
+    setSeparationStats(separatedData.stats);
+  }, [separatedData]);
+
+  // Handle active Gaussian dataset changes (ALL, STATIC_ONLY, DYNAMIC_ONLY)
+  useEffect(() => {
+    if (!rendererRef.current) return;
+
+    let activeList = generatedData.polynomials;
+    if (separationMode === 'STATIC_ONLY') {
+      activeList = separatedData.staticGaussians;
+    } else if (separationMode === 'DYNAMIC_ONLY') {
+      activeList = separatedData.dynamicGaussians;
+    }
+
+    rendererRef.current.setGaussians4D(activeList, generatedData.scene.duration);
+  }, [separationMode, generatedData, separatedData]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     try {
-      // Initialize WebGL2 Renderer with 4D Temporal Pipeline and 6-DoF Camera
       const renderer = new WebGLRenderer(canvas, {
         onStats: (newStats) => setStats(newStats),
         onCameraTelemetry: (telemetry) => setCameraTelemetry(telemetry),
@@ -52,9 +84,7 @@ export const App: React.FC = () => {
       });
       rendererRef.current = renderer;
 
-      // Generate procedural 4D Temporal Gaussian Scene (1200 Gaussians: 360 Static, 840 Dynamic)
-      const { scene, polynomials } = generateTemporalGaussianScene(1200, 5.0, 30);
-      renderer.setGaussians4D(polynomials, scene.duration);
+      renderer.setGaussians4D(generatedData.polynomials, generatedData.scene.duration);
       renderer.start();
 
       setWebglStatus('READY');
@@ -70,7 +100,7 @@ export const App: React.FC = () => {
         rendererRef.current = null;
       }
     };
-  }, []);
+  }, [generatedData]);
 
   const handleTogglePlay = () => {
     if (rendererRef.current) {
@@ -135,7 +165,7 @@ export const App: React.FC = () => {
       overflow: 'hidden',
       userSelect: 'none'
     }}>
-      {/* Top Header Bar */}
+      {/* Top Navigation Bar */}
       <header style={{
         height: '46px',
         padding: '0 16px',
@@ -156,12 +186,68 @@ export const App: React.FC = () => {
             boxShadow: webglStatus === 'READY' ? '0 0 8px #10b981' : 'none'
           }} />
           <span style={{ fontWeight: 700, fontSize: '13px', letterSpacing: '0.08em', color: '#f8fafc' }}>
-            4DV PLAYER <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600, marginLeft: '4px' }}>PHASE 4: 4D TEMPORAL SCENE</span>
+            4DV PLAYER <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600, marginLeft: '4px' }}>PHASE 5: STATIC/DYNAMIC SPLIT</span>
           </span>
         </div>
 
-        {/* Camera and Viewport Actions */}
+        {/* View Mode Filters & Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* Static / Dynamic Filter */}
+          <div style={{
+            display: 'flex',
+            backgroundColor: 'rgba(0, 0, 0, 0.3)',
+            borderRadius: '6px',
+            padding: '2px',
+            border: '1px solid rgba(255, 255, 255, 0.08)'
+          }}>
+            <button
+              onClick={() => setSeparationMode('ALL')}
+              style={{
+                background: separationMode === 'ALL' ? '#38bdf8' : 'transparent',
+                border: 'none',
+                color: separationMode === 'ALL' ? '#0f172a' : '#94a3b8',
+                padding: '4px 8px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '10px',
+                fontWeight: 600
+              }}
+            >
+              All (1,200)
+            </button>
+            <button
+              onClick={() => setSeparationMode('STATIC_ONLY')}
+              style={{
+                background: separationMode === 'STATIC_ONLY' ? '#38bdf8' : 'transparent',
+                border: 'none',
+                color: separationMode === 'STATIC_ONLY' ? '#0f172a' : '#94a3b8',
+                padding: '4px 8px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '10px',
+                fontWeight: 600
+              }}
+            >
+              Static ({separationStats?.staticCount || 360})
+            </button>
+            <button
+              onClick={() => setSeparationMode('DYNAMIC_ONLY')}
+              style={{
+                background: separationMode === 'DYNAMIC_ONLY' ? '#38bdf8' : 'transparent',
+                border: 'none',
+                color: separationMode === 'DYNAMIC_ONLY' ? '#0f172a' : '#94a3b8',
+                padding: '4px 8px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '10px',
+                fontWeight: 600
+              }}
+            >
+              Dynamic ({separationStats?.dynamicCount || 840})
+            </button>
+          </div>
+
+          {/* Camera Flight vs Orbit Mode */}
           <div style={{
             display: 'flex',
             backgroundColor: 'rgba(0, 0, 0, 0.3)',
@@ -175,14 +261,14 @@ export const App: React.FC = () => {
                 background: cameraMode === 'FREE_FLIGHT' ? '#0284c7' : 'transparent',
                 border: 'none',
                 color: cameraMode === 'FREE_FLIGHT' ? '#ffffff' : '#94a3b8',
-                padding: '4px 10px',
+                padding: '4px 8px',
                 borderRadius: '4px',
                 cursor: 'pointer',
-                fontSize: '11px',
+                fontSize: '10px',
                 fontWeight: 600
               }}
             >
-              6-DoF Free Flight
+              6-DoF Flight
             </button>
             <button
               onClick={() => handleModeChange('ORBIT')}
@@ -190,14 +276,14 @@ export const App: React.FC = () => {
                 background: cameraMode === 'ORBIT' ? '#0284c7' : 'transparent',
                 border: 'none',
                 color: cameraMode === 'ORBIT' ? '#ffffff' : '#94a3b8',
-                padding: '4px 10px',
+                padding: '4px 8px',
                 borderRadius: '4px',
                 cursor: 'pointer',
-                fontSize: '11px',
+                fontSize: '10px',
                 fontWeight: 600
               }}
             >
-              Orbit Target
+              Orbit
             </button>
           </div>
 
@@ -207,10 +293,10 @@ export const App: React.FC = () => {
               background: 'rgba(255, 255, 255, 0.06)',
               border: '1px solid rgba(255, 255, 255, 0.12)',
               color: '#cbd5e1',
-              padding: '4px 10px',
+              padding: '4px 8px',
               borderRadius: '4px',
               cursor: 'pointer',
-              fontSize: '11px',
+              fontSize: '10px',
               fontWeight: 500
             }}
           >
@@ -268,15 +354,16 @@ export const App: React.FC = () => {
             fontSize: '11px',
             lineHeight: '1.6',
             color: '#cbd5e1',
-            minWidth: '230px'
+            minWidth: '240px'
           }}>
             <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '2px', fontSize: '11px', letterSpacing: '0.04em' }}>
-              4D SCENE DIAGNOSTICS
+              SCENE & SEPARATION STATS
             </div>
-            <div>Gaussians: <span style={{ color: '#38bdf8', fontWeight: 600 }}>1,200</span> (360 Static, 840 4D Dynamic)</div>
+            <div>Active Gaussians: <span style={{ color: '#38bdf8', fontWeight: 600 }}>{stats.gaussianCount.toLocaleString()}</span></div>
+            <div>Static: <span style={{ color: '#94a3b8' }}>{separationStats?.staticCount} ({((separationStats?.staticRatio || 0) * 100).toFixed(0)}%)</span></div>
+            <div>Dynamic: <span style={{ color: '#a78bfa' }}>{separationStats?.dynamicCount} ({((separationStats?.dynamicRatio || 0) * 100).toFixed(0)}%)</span></div>
+            <div>Bandwidth Saved: <span style={{ color: '#34d399', fontWeight: 600 }}>{separationStats?.bandwidthSavedPercent}%</span></div>
             <div>FPS: <span style={{ color: stats.fps >= 50 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>{stats.fps}</span> ({stats.frameTimeMs} ms)</div>
-            <div>Evaluation: <span style={{ color: '#34d399' }}>GPU-Side Vertex Shaders</span></div>
-            <div>Viewport: <span style={{ color: '#94a3b8' }}>{stats.viewportWidth} × {stats.viewportHeight}</span></div>
           </div>
 
           {/* Camera Telemetry */}
@@ -289,7 +376,7 @@ export const App: React.FC = () => {
             fontSize: '11px',
             lineHeight: '1.6',
             color: '#cbd5e1',
-            minWidth: '230px'
+            minWidth: '240px'
           }}>
             <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: '2px', fontSize: '11px', letterSpacing: '0.04em' }}>
               CAMERA TELEMETRY
@@ -356,7 +443,7 @@ export const App: React.FC = () => {
         backgroundColor: '#0e1424',
         zIndex: 10
       }}>
-        {/* Timeline Slider with Discrete Test Markers */}
+        {/* Timeline Slider */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <span style={{ fontSize: '11px', fontFamily: 'monospace', color: '#38bdf8', minWidth: '60px' }}>
             {formatTime(currentTime)}
@@ -460,9 +547,9 @@ export const App: React.FC = () => {
         fontSize: '10px',
         color: '#64748b'
       }}>
-        <div>Temporal Model: 4D Polynomial Kinematics $P(t) = P_0 + P_1 t + P_2 t^2 + A \sin(\omega t + \phi)$</div>
-        <div>Evaluation: GPU Vertex Shaders</div>
-        <div>6-DoF Navigation + Live 4D Playback Active</div>
+        <div>Separation: Static (360 / 30%) + Dynamic (840 / 70%) Factorization</div>
+        <div>Bandwidth Savings: {separationStats?.bandwidthSavedPercent}%</div>
+        <div>6-DoF Navigation Active</div>
       </footer>
     </div>
   );
