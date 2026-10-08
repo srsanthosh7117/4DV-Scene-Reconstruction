@@ -103,3 +103,28 @@
 - Confirmed stable 60 FPS execution on integrated Intel Iris / AMD Radeon graphics with no discrete GPU or WebGPU requirements.
 - Synced all artifacts and documentation to Git and GitHub repository.
 
+---
+
+## 🔍 Stage 1 — Codebase Audit & True Pipeline State
+
+An exhaustive audit of `src/format/`, `src/workers/`, `src/renderer/`, `src/camera/`, `src/timeline/`, `src/evaluation/`, `src/demo/`, and `src/app/` was performed to identify the real connectivity of all components:
+
+| Component / Subsystem | Current Implementation Status | True Connectivity in Encoding/Decoding Pipeline |
+| :--- | :--- | :--- |
+| **`FourDVWriter.ts`** | Serializes 64B Header, 32B TOC, Static & Dynamic Blocks, and JSON metadata. | **Float32 Direct**: Writes uncompressed 32-bit floats directly (`setFloat32`) for all positions, scales, colors, velocities, and harmonics. |
+| **Quantization (`quantization.ts`)** | Contains 16-bit position/scale, 8-bit color/opacity math & Morton curve sorting. | **Disconnected from Writer**: The writer only calls `computeSceneBounds`. Quantized integer records are not yet written into `.4dv` files. |
+| **Temporal Delta Compression (`temporalCompression.ts`)** | Contains standalone keyframe + delta encoding logic. | **Disconnected from Writer**: Writer stores raw continuous polynomial parameters ($P_0, P_1, P_2, P_3$) rather than delta frames. |
+| **DEFLATE Streams (`deflate.ts`)** | Implements Web Streams API `CompressionStream` / `DecompressionStream`. | **Disconnected from Writer/Reader**: Neither the writer nor reader routes chunk buffers through DEFLATE compression. |
+| **TOC Chunk Structure** | Creates a single TOC entry covering $[0.0, \text{duration}]$. | **Single Chunk Only**: Temporal sub-chunking (e.g. 10–30 frames per chunk) and seekable multi-chunk TOC are not yet active. |
+| **`FourDVReader.ts`** | Parses container header, TOC, and reads Float32 static (10-float) and dynamic (19-float) arrays. | **Uncompressed Float32 Only**: Cannot currently dequantize integer streams or decompress DEFLATE payloads. |
+| **Decoder Worker (`decoder.worker.ts`)** | Off-thread worker invoking `decode4DV()` with transferable `ArrayBuffer`. | **Connected**: Successfully calls `FourDVReader.ts` in background thread. |
+| **Player Integration (`App.tsx`, `WorkerBridge.ts`)** | UI file picker and drag-and-drop invoke `WorkerBridge.decode4DVAsync()`. | **Connected**: Correctly uses Web Worker for `.4dv` file ingestion. |
+| **Novel View Evaluation (`heldoutEvaluation.ts`)** | Captures real WebGL2 canvas rendering from arbitrary 4×4 pose matrix. | **Real Image Capture / Fixed Metrics**: Renders real canvas snapshot to PNG; metrics use fixed baseline formulas rather than live pixel diffing. |
+
+### Audit Summary:
+1. **Serialization**: Currently writes raw 32-bit floats (40B static, 76B dynamic).
+2. **Quantization & Morton Sorting**: Implemented in isolation; needs direct integration into `FourDVWriter` and `FourDVReader`.
+3. **Temporal Delta Compression**: Needs to be connected to the real file encoding path with configurable frame chunking.
+4. **TOC & DEFLATE**: Needs multi-chunk table generation with per-chunk DEFLATE compression and random-access seeking.
+5. **Next Target**: Proceed to **Stage 2** (Connect Quantization to the Actual Encoder).
+
