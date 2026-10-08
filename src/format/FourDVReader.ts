@@ -1,6 +1,7 @@
 import {
   FOURDV_MAGIC,
   FOURDV_VERSION,
+  FourDVFlags,
   FourDVHeader,
   FourDVTocEntry,
   Decoded4DScene,
@@ -8,6 +9,7 @@ import {
 
 /**
  * Decodes a raw .4DV binary file buffer into an uncompressed 4D Gaussian scene representation.
+ * Supports both Quantized (16-bit/8-bit) and legacy Float32 container streams.
  */
 export function decode4DV(buffer: ArrayBuffer | Uint8Array): Decoded4DScene {
   const arrayBuffer = buffer instanceof Uint8Array ? buffer.buffer : buffer;
@@ -51,8 +53,17 @@ export function decode4DV(buffer: ArrayBuffer | Uint8Array): Decoded4DScene {
     dataView.getFloat32(52, true),
   ];
 
-  const tocOffset = dataView.getUint32(56, true);
-  const tocEntriesCount = dataView.getUint32(60, true);
+  const scaleMax = dataView.getFloat32(56, true);
+  const velMax = dataView.getFloat32(60, true);
+  const accelMax = dataView.getFloat32(64, true);
+  const harmonicMax: [number, number, number] = [
+    dataView.getFloat32(68, true),
+    dataView.getFloat32(72, true),
+    dataView.getFloat32(76, true),
+  ];
+
+  const tocOffset = dataView.getUint32(80, true);
+  const tocEntriesCount = dataView.getUint32(84, true);
 
   const header: FourDVHeader = {
     magic,
@@ -66,6 +77,10 @@ export function decode4DV(buffer: ArrayBuffer | Uint8Array): Decoded4DScene {
     dynamicGaussians,
     boundsMin,
     boundsMax,
+    scaleMax: scaleMax || 1.0,
+    velMax: velMax || 1.0,
+    accelMax: accelMax || 1.0,
+    harmonicMax: harmonicMax[0] ? harmonicMax : [1.0, 1.0, Math.PI * 2],
     tocOffset,
     tocEntries: tocEntriesCount,
   };
@@ -82,51 +97,152 @@ export function decode4DV(buffer: ArrayBuffer | Uint8Array): Decoded4DScene {
       byteLength: dataView.getUint32(ptr + 16, true),
       uncompressedLength: dataView.getUint32(ptr + 20, true),
       gaussianCount: dataView.getUint32(ptr + 24, true),
+      flags: dataView.getUint32(ptr + 28, true),
     });
   }
 
-  // 4. Read Static & Dynamic blocks
-  const staticBlockSize = staticGaussians * 10 * 4;
-  const dynamicBlockSize = dynamicGaussians * 19 * 4;
+  // 4. Normalization Deltas
+  const dx = Math.max(boundsMax[0] - boundsMin[0], 0.0001);
+  const dy = Math.max(boundsMax[1] - boundsMin[1], 0.0001);
+  const dz = Math.max(boundsMax[2] - boundsMin[2], 0.0001);
+  const sMax = Math.max(header.scaleMax, 0.0001);
+  const vMax = Math.max(header.velMax, 0.0001);
+  const aMax = Math.max(header.accelMax, 0.0001);
+
+  const isQuantized = (flags & FourDVFlags.IS_QUANTIZED) !== 0;
+
+  const staticBytesPerElem = isQuantized ? 16 : 40;
+  const dynamicBytesPerElem = isQuantized ? 34 : 76;
+
+  const staticBlockSize = staticGaussians * staticBytesPerElem;
+  const dynamicBlockSize = dynamicGaussians * dynamicBytesPerElem;
   const dataStart = tocOffset + tocEntriesCount * 32;
   const dynamicStart = dataStart + staticBlockSize;
 
-  // Static attributes: 10 floats per static Gaussian
+  // 5. Decode Static Attributes (10 floats per primitive)
   const staticFloats = new Float32Array(staticGaussians * 10);
-  for (let i = 0; i < staticGaussians * 10; i++) {
-    staticFloats[i] = dataView.getFloat32(dataStart + i * 4, true);
+  if (isQuantized) {
+    let offset = dataStart;
+    for (let i = 0; i < staticGaussians; i++) {
+      const dst = i * 10;
+      // 16-bit Position
+      const qx = dataView.getUint16(offset + 0, true);
+      const qy = dataView.getUint16(offset + 2, true);
+      const qz = dataView.getUint16(offset + 4, true);
+      staticFloats[dst + 0] = boundsMin[0] + (qx / 65535) * dx;
+      staticFloats[dst + 1] = boundsMin[1] + (qy / 65535) * dy;
+      staticFloats[dst + 2] = boundsMin[2] + (qz / 65535) * dz;
+
+      // 16-bit Scale
+      const qsx = dataView.getUint16(offset + 6, true);
+      const qsy = dataView.getUint16(offset + 8, true);
+      const qsz = dataView.getUint16(offset + 10, true);
+      staticFloats[dst + 3] = (qsx / 65535) * sMax;
+      staticFloats[dst + 4] = (qsy / 65535) * sMax;
+      staticFloats[dst + 5] = (qsz / 65535) * sMax;
+
+      // 8-bit Color
+      staticFloats[dst + 6] = dataView.getUint8(offset + 12) / 255;
+      staticFloats[dst + 7] = dataView.getUint8(offset + 13) / 255;
+      staticFloats[dst + 8] = dataView.getUint8(offset + 14) / 255;
+
+      // 8-bit Opacity
+      staticFloats[dst + 9] = dataView.getUint8(offset + 15) / 255;
+
+      offset += 16;
+    }
+  } else {
+    for (let i = 0; i < staticGaussians * 10; i++) {
+      staticFloats[i] = dataView.getFloat32(dataStart + i * 4, true);
+    }
   }
 
-  // Dynamic attributes: 19 floats per dynamic Gaussian
+  // 6. Decode Dynamic Attributes (19 floats per primitive)
   const dynamicFloats = new Float32Array(dynamicGaussians * 19);
-  for (let i = 0; i < dynamicGaussians * 19; i++) {
-    dynamicFloats[i] = dataView.getFloat32(dynamicStart + i * 4, true);
+  if (isQuantized) {
+    let offset = dynamicStart;
+    for (let i = 0; i < dynamicGaussians; i++) {
+      const dst = i * 19;
+      // 16-bit Base Position
+      const qx = dataView.getUint16(offset + 0, true);
+      const qy = dataView.getUint16(offset + 2, true);
+      const qz = dataView.getUint16(offset + 4, true);
+      dynamicFloats[dst + 0] = boundsMin[0] + (qx / 65535) * dx;
+      dynamicFloats[dst + 1] = boundsMin[1] + (qy / 65535) * dy;
+      dynamicFloats[dst + 2] = boundsMin[2] + (qz / 65535) * dz;
+
+      // 16-bit Scale
+      const qsx = dataView.getUint16(offset + 6, true);
+      const qsy = dataView.getUint16(offset + 8, true);
+      const qsz = dataView.getUint16(offset + 10, true);
+      dynamicFloats[dst + 3] = (qsx / 65535) * sMax;
+      dynamicFloats[dst + 4] = (qsy / 65535) * sMax;
+      dynamicFloats[dst + 5] = (qsz / 65535) * sMax;
+
+      // 8-bit Color
+      dynamicFloats[dst + 6] = dataView.getUint8(offset + 12) / 255;
+      dynamicFloats[dst + 7] = dataView.getUint8(offset + 13) / 255;
+      dynamicFloats[dst + 8] = dataView.getUint8(offset + 14) / 255;
+
+      // 8-bit Opacity
+      dynamicFloats[dst + 9] = dataView.getUint8(offset + 15) / 255;
+
+      // 16-bit Velocity P1
+      const vx = dataView.getInt16(offset + 16, true);
+      const vy = dataView.getInt16(offset + 18, true);
+      const vz = dataView.getInt16(offset + 20, true);
+      dynamicFloats[dst + 10] = (vx / 32767) * vMax;
+      dynamicFloats[dst + 11] = (vy / 32767) * vMax;
+      dynamicFloats[dst + 12] = (vz / 32767) * vMax;
+
+      // 16-bit Accel P2
+      const ax = dataView.getInt16(offset + 22, true);
+      const ay = dataView.getInt16(offset + 24, true);
+      const az = dataView.getInt16(offset + 26, true);
+      dynamicFloats[dst + 13] = (ax / 32767) * aMax;
+      dynamicFloats[dst + 14] = (ay / 32767) * aMax;
+      dynamicFloats[dst + 15] = (az / 32767) * aMax;
+
+      // 16-bit Harmonic P3
+      const hAmp = dataView.getUint16(offset + 28, true);
+      const hFreq = dataView.getUint16(offset + 30, true);
+      const hPhase = dataView.getUint16(offset + 32, true);
+      dynamicFloats[dst + 16] = (hAmp / 65535) * header.harmonicMax[0];
+      dynamicFloats[dst + 17] = (hFreq / 65535) * header.harmonicMax[1];
+      dynamicFloats[dst + 18] = (hPhase / 65535) * header.harmonicMax[2];
+
+      offset += 34;
+    }
+  } else {
+    for (let i = 0; i < dynamicGaussians * 19; i++) {
+      dynamicFloats[i] = dataView.getFloat32(dynamicStart + i * 4, true);
+    }
   }
 
-  // 5. Build Unified Interleaved 19-float GPU Array for direct single-call rendering
+  // 7. Build Unified Interleaved 19-float GPU Array
   const allGaussiansPacked = new Float32Array(totalGaussians * 19);
 
-  // Unpack Static into unified layout (zeros for velocity/harmonic)
+  // Unpack Static into unified layout
   for (let i = 0; i < staticGaussians; i++) {
     const src = i * 10;
     const dst = i * 19;
-    allGaussiansPacked[dst + 0] = staticFloats[src + 0]; // pos X
-    allGaussiansPacked[dst + 1] = staticFloats[src + 1]; // pos Y
-    allGaussiansPacked[dst + 2] = staticFloats[src + 2]; // pos Z
-    allGaussiansPacked[dst + 3] = staticFloats[src + 3]; // scale X
-    allGaussiansPacked[dst + 4] = staticFloats[src + 4]; // scale Y
-    allGaussiansPacked[dst + 5] = staticFloats[src + 5]; // scale Z
-    allGaussiansPacked[dst + 6] = staticFloats[src + 6]; // col R
-    allGaussiansPacked[dst + 7] = staticFloats[src + 7]; // col G
-    allGaussiansPacked[dst + 8] = staticFloats[src + 8]; // col B
-    allGaussiansPacked[dst + 9] = staticFloats[src + 9]; // opacity
+    allGaussiansPacked[dst + 0] = staticFloats[src + 0];
+    allGaussiansPacked[dst + 1] = staticFloats[src + 1];
+    allGaussiansPacked[dst + 2] = staticFloats[src + 2];
+    allGaussiansPacked[dst + 3] = staticFloats[src + 3];
+    allGaussiansPacked[dst + 4] = staticFloats[src + 4];
+    allGaussiansPacked[dst + 5] = staticFloats[src + 5];
+    allGaussiansPacked[dst + 6] = staticFloats[src + 6];
+    allGaussiansPacked[dst + 7] = staticFloats[src + 7];
+    allGaussiansPacked[dst + 8] = staticFloats[src + 8];
+    allGaussiansPacked[dst + 9] = staticFloats[src + 9];
   }
 
   // Copy Dynamic into unified layout
   const dynamicDstStart = staticGaussians * 19;
   allGaussiansPacked.set(dynamicFloats, dynamicDstStart);
 
-  // 6. Parse Metadata Block
+  // 8. Parse Metadata Block
   const metaStart = dynamicStart + dynamicBlockSize;
   let metadata = {
     title: '4DV Scene',
@@ -139,10 +255,11 @@ export function decode4DV(buffer: ArrayBuffer | Uint8Array): Decoded4DScene {
     if (metaStart + 4 + metaLen <= byteLength) {
       const metaBytes = new Uint8Array(arrayBuffer, byteOffset + metaStart + 4, metaLen);
       try {
-        const metaStr = new TextDecoder().decode(metaBytes);
-        metadata = JSON.parse(metaStr);
+        const jsonStr = new TextDecoder().decode(metaBytes);
+        const parsed = JSON.parse(jsonStr);
+        metadata = { ...metadata, ...parsed };
       } catch (e) {
-        console.warn('[FourDVReader] Failed to parse metadata JSON:', e);
+        console.warn('[FourDVReader] Failed to parse JSON metadata:', e);
       }
     }
   }

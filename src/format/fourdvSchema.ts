@@ -11,6 +11,16 @@ export enum FourDVFlags {
   IS_QUANTIZED = 1 << 1,
   IS_COMPRESSED = 1 << 2,
   HAS_SPATIAL_MORTON = 1 << 3,
+  HAS_TEMPORAL_DELTAS = 1 << 4,
+}
+
+export interface FourDVRanges {
+  boundsMin: [number, number, number];
+  boundsMax: [number, number, number];
+  scaleMax: number;
+  velMax: number;
+  accelMax: number;
+  harmonicMax: [number, number, number]; // [ampMax, freqMax, phaseMax]
 }
 
 export interface FourDVHeader {
@@ -25,6 +35,10 @@ export interface FourDVHeader {
   dynamicGaussians: number; // 4 bytes
   boundsMin: [number, number, number]; // 12 bytes
   boundsMax: [number, number, number]; // 12 bytes
+  scaleMax: number;         // 4 bytes
+  velMax: number;           // 4 bytes
+  accelMax: number;         // 4 bytes
+  harmonicMax: [number, number, number]; // 12 bytes
   tocOffset: number;        // 4 bytes
   tocEntries: number;       // 4 bytes
 }
@@ -37,6 +51,7 @@ export interface FourDVTocEntry {
   byteLength: number;
   uncompressedLength: number;
   gaussianCount: number;
+  flags?: number;
 }
 
 export interface Decoded4DScene {
